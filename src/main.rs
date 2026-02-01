@@ -1,14 +1,8 @@
-use std::fs;
-use std::io::prelude::*;
-use std::os::unix::net::UnixStream;
-use std::process::Child;
-use std::process::Command;
-use std::process::Stdio;
-use std::{thread, time};
-
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::widgets::Tabs;
-use ratatui::widgets::Widget;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
@@ -17,13 +11,15 @@ use ratatui::{
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 use serde::Deserialize;
+use std::error::Error;
+use std::process::Command;
 
-fn main() -> color_eyre::Result<()> {
+fn main() -> color_eyre::Result<(), Box<dyn Error>> {
     color_eyre::install()?;
-    let terminal = ratatui::init();
-    let result = App::new().run(terminal);
+    let mut terminal = ratatui::init();
+    App::new().run(&mut terminal)?;
     ratatui::restore();
-    result
+    Ok(())
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -31,8 +27,8 @@ struct Video {
     id: String,
     title: String,
     uploader: String,
-    //#[serde(default)]
-    //duration: String,
+    // #[serde(default)]
+    // duration: f64,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -41,7 +37,6 @@ enum Mode {
     //Menu,
     Search,
     Results,
-    NowPlaying,
 }
 
 /// The main application which holds the state and logic of the application.
@@ -55,10 +50,6 @@ struct App {
     mode: Mode,
     search_query: String,
     video_list: Vec<Video>,
-    tabs_titles: Vec<&'static str>,
-    tabs_current: usize,
-    child_process: Option<Child>,
-    mpv_stream: Option<UnixStream>,
 }
 
 impl App {
@@ -70,10 +61,6 @@ impl App {
         let mode = Mode::default();
         let search_query = String::default();
         let video_list = Vec::new();
-        let tabs_titles = vec!["Search", "Now Playing"];
-        let tabs_current: usize = 0;
-        let child_process: Option<Child> = None;
-        let mpv_stream: Option<UnixStream> = None;
 
         Self {
             running,
@@ -82,10 +69,6 @@ impl App {
             search_query,
             video_list,
             resultlist_state,
-            tabs_titles,
-            tabs_current,
-            child_process,
-            mpv_stream,
         }
     }
     fn new() -> Self {
@@ -93,11 +76,11 @@ impl App {
     }
 
     /// Run the application's main loop.
-    fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
+    fn run(mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         self.running = true;
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
-            self.handle_crossterm_events()?;
+            self.handle_crossterm_events(terminal)?;
         }
         Ok(())
     }
@@ -109,8 +92,7 @@ impl App {
     /// - <https://docs.rs/ratatui/latest/ratatui/widgets/index.html>
     /// - <https://github.com/ratatui/ratatui/tree/main/ratatui-widgets/examples>
     fn render(&mut self, frame: &mut Frame) {
-        let [tabs_area, search_area, results_area, status_area] = Layout::vertical([
-            Constraint::Length(1),
+        let [search_area, results_area, status_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(0),
             Constraint::Length(3),
@@ -122,12 +104,6 @@ impl App {
             Block::bordered().title(" Results "),
             Block::bordered(),
         ];
-
-        let tabs = Tabs::new(self.tabs_titles.clone())
-            .select(Some(self.tabs_current))
-            .highlight_style(style::Color::Green);
-
-        tabs.render(tabs_area, frame.buffer_mut());
 
         frame.render_widget(
             Paragraph::new(format!(" {}", self.search_query)).block(search_block),
@@ -149,9 +125,7 @@ impl App {
         );
 
         frame.render_widget(
-            Paragraph::new(" H/L: Switch Tab ")
-                .block(status_block.clone())
-                .centered(),
+            Paragraph::new(" /: Search ").block(status_block).centered(),
             status_area,
         );
 
@@ -163,7 +137,7 @@ impl App {
                     .iter()
                     .map(|video| {
                         ListItem::new(Span::styled(
-                            format!("{:<40} uploader: {}", video.title, video.uploader),
+                            format!("{:<40} uploader: {}", video.title, video.uploader,),
                             ratatui::style::Style::default().fg(ratatui::style::Color::Gray),
                         ))
                     })
@@ -177,7 +151,6 @@ impl App {
                     &mut self.resultlist_state,
                 );
             }
-            Mode::NowPlaying => {}
         }
     }
 
@@ -221,95 +194,52 @@ impl App {
         }
     }
 
-    fn play_video(&mut self) {
-        self.mode = Mode::NowPlaying;
-        if fs::exists("/tmp/mpv-socket").expect("Can't check if /tmp/mpv-socket exists") {
-            fs::remove_file("/tmp/mpv-socket").expect("could not remove /tmp/mpv-socket");
-        }
+    fn play_video(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
         if let Some(index) = self.resultlist_state.selected() {
-            let child = Command::new("mpv")
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            let _ = Command::new("mpv")
+                .arg("--ytdl-format=bestaudio")
                 .arg(format!(
                     "https://www.youtube.com/watch?v={}",
                     self.video_list[index].id
                 ))
                 .arg("--no-video")
-                .arg("--input-ipc-server=/tmp/mpv-socket")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .stdin(Stdio::null())
-                .spawn()
-                .expect("Error loading the video");
-            self.child_process = Some(child);
-        }
-        let mut tries = 0;
-        loop {
-            if tries > 3 {
-                break;
-            }
-            thread::sleep(time::Duration::from_millis(500));
-            match UnixStream::connect("/tmp/mpv-socket") {
-                Ok(o) => self.mpv_stream = Some(o),
-                Err(e) => {
-                    println!("Could not connect mpv-socket: {e}");
-                }
-            };
-            tries += 1;
-        }
-    }
-
-    pub fn send_mpv_command(&mut self, command: &str, args: Vec<&str>) {
-        let mut vec_args: Vec<String> = Vec::new();
-        for arg in args {
-            vec_args.push(format!("\"{}\"", arg));
-        }
-        let json_args = vec_args.join(",");
-
-        let message = format!("{{\"{command}\": [{json_args}]}}\n");
-        if let Some(ref mut stream) = self.mpv_stream {
-            stream
-                .write_all(message.as_bytes())
-                .expect("Could not write the command to mpv-socket");
-        } else {
-            println!("Mpv socket not connected.");
-        }
-    }
-
-    fn tabs_next_index(&mut self) {
-        self.tabs_current = (self.tabs_current + 1) % self.tabs_titles.len();
-    }
-
-    fn tabs_previous_index(&mut self) {
-        if self.tabs_current > 0 {
-            self.tabs_current -= 1;
-        } else {
-            self.tabs_current = self.tabs_titles.len() - 1;
-        }
-    }
-    /// Reads the crossterm gevents and updates the state of [`App`].
-    ///
-    /// If your application needs to perform work in between handling events, you can use the
-    /// [`event::poll`] function to check if there are any events available with a timeout.
-    fn handle_crossterm_events(&mut self) -> color_eyre::Result<()> {
-        match event::read()? {
-            // it's important to check KeyEventKind::Press to avoid handling key release events
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key),
-            Event::Mouse(_) => {}
-            Event::Resize(_, _) => {}
-            _ => {}
+                .status();
+            enable_raw_mode()?;
+            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+            terminal.clear()?;
         }
         Ok(())
     }
 
-    /// Handles the key events and updates the state of [`App`].
-    fn on_key_event(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('H') => self.tabs_next_index(),
-            KeyCode::Char('L') => self.tabs_previous_index(),
-            _ => {}
-        }
+    /// Reads the crossterm gevents and updates the state of [`App`].
+    ///
+    /// If your application needs to perform work in between handling events, you can use the
+    /// [`event::poll`] function to check if there are any events available with a timeout.
+    fn handle_crossterm_events(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+    ) -> color_eyre::Result<()> {
+        match event::read()? {
+            // it's important to check KeyEventKind::Press to avoid handling key release events
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key, terminal),
+            Event::Mouse(_) => return Ok(()),
+            Event::Resize(_, _) => return Ok(()),
+            _ => return Ok(()),
+        }?;
+        Ok(())
+    }
+
+    fn on_key_event(
+        &mut self,
+        key: KeyEvent,
+        terminal: &mut DefaultTerminal,
+    ) -> color_eyre::Result<()> {
         match self.mode {
             Mode::Search => match key.code {
-                KeyCode::Char('q') => self.quit(),
+                KeyCode::Char('q' | 'Q') => self.quit(),
+                KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => self.quit(),
                 KeyCode::Char(c) => self.search_query.push(c),
                 KeyCode::Backspace => {
                     self.search_query.pop();
@@ -321,32 +251,22 @@ impl App {
                 _ => {}
             },
             Mode::Results => match key.code {
-                KeyCode::Char('q') => self.quit(),
+                KeyCode::Char('q' | 'Q') => self.quit(),
+                KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => self.quit(),
                 KeyCode::Char('j') => self.resultlist_state.select_next(),
                 KeyCode::Char('k') => self.resultlist_state.select_previous(),
-                KeyCode::Enter => self.play_video(),
-                _ => {}
-            },
-            Mode::NowPlaying => match key.code {
-                KeyCode::Esc | KeyCode::Char('s') => {
-                    self.send_mpv_command("command", vec!["stop"]);
-                    self.mode = Mode::Results;
+                KeyCode::Enter => {
+                    let _ = self.play_video(terminal);
                 }
-                KeyCode::Char(' ') => self.send_mpv_command("command", vec!["cycle", "pause"]),
+                KeyCode::Char('/') => self.mode = Mode::Search,
                 _ => {}
             },
         }
+        Ok(())
     }
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
-        if let Some(ref mut child) = self.child_process {
-            child
-                .kill()
-                .expect("No Child getting killed today. Humanity");
-        } else {
-            println!("Could not kill child. Call IDF");
-        }
         self.running = false;
     }
 }
