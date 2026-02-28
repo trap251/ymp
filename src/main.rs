@@ -16,7 +16,8 @@ use std::{
     io::Write,
     os::unix::net::UnixStream,
     process::{Child, Command, Stdio},
-    thread, time,
+    thread,
+    time::{self, Duration},
 };
 use tokio::sync::mpsc;
 
@@ -160,7 +161,9 @@ impl App {
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
             self.check_search_results()?;
-            self.handle_crossterm_events()?;
+            if event::poll(Duration::from_millis(50))? {
+                self.handle_crossterm_events()?;
+            }
         }
         Ok(())
     }
@@ -433,7 +436,7 @@ impl App {
 
     /// Reads the crossterm gevents and updates the state of [`App`].
     ///
-    /// If your application needs to perform work in between handling events, you can use the
+    /// If application needs to perform work in between handling events, use the
     /// [`event::poll`] function to check if there are any events available with a timeout.
     fn handle_crossterm_events(&mut self) -> color_eyre::Result<()> {
         match event::read()? {
