@@ -12,11 +12,10 @@ use ratatui::{
 use serde::Deserialize;
 use std::{
     fs,
-    io::Write,
+    io::{ErrorKind, Write},
     os::unix::net::UnixStream,
     process::{Child, Command, Stdio},
-    thread,
-    time::{self, Duration},
+    time::Duration,
 };
 use tokio::sync::mpsc;
 
@@ -61,8 +60,8 @@ impl Widget for Popup<'_> {
 struct Video {
     id: String,
     title: String,
+    #[serde(default)]
     uploader: String,
-    // #[serde(default)]
     // duration: f64,
 }
 
@@ -71,7 +70,9 @@ impl Video {
         app.send_mpv_command(vec!["cycle", "pause"])
     }
     fn stop(app: &mut App) -> color_eyre::Result<()> {
-        app.send_mpv_command(vec!["stop"])
+        app.is_nowplaying = false;
+        app.kill_mpv();
+        Ok(())
     }
     fn increase_volume(app: &mut App) -> color_eyre::Result<()> {
         app.send_mpv_command(vec!["add", "volume", "5"])
@@ -89,7 +90,6 @@ enum Mode {
     #[default]
     Default,
     Search,
-    NowPlaying,
 }
 
 /// The main application which holds the state and logic of the application.
@@ -110,7 +110,9 @@ struct App {
     tabs_current: usize,
     child_process: Option<Child>,
     mpv_stream: Option<UnixStream>,
+    mpv_connect_attempts: i8,
     now_playing: Video,
+    is_nowplaying: bool,
 
     // tokio  search-related stuff
     is_loading: bool, // In-case I want to add a leading screen
@@ -141,7 +143,9 @@ impl App {
         let tabs_current: usize = 0;
         let child_process: Option<Child> = None;
         let mpv_stream: Option<UnixStream> = None;
+        let mpv_connect_attempts = 0;
         let now_playing: Video = Video::default();
+        let is_nowplaying = false;
         let is_loading = false;
         let search_rx = None;
 
@@ -159,7 +163,9 @@ impl App {
             tabs_current,
             child_process,
             mpv_stream,
+            mpv_connect_attempts,
             now_playing,
+            is_nowplaying,
             is_loading,
             search_rx,
         }
@@ -175,6 +181,7 @@ impl App {
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
             self.check_search_results()?;
+            self.try_connect_mpv();
             if event::poll(Duration::from_millis(50))? {
                 self.handle_crossterm_events()?;
             }
@@ -213,7 +220,7 @@ impl App {
         );
 
         frame.render_widget(
-            Paragraph::new(" H/L: Switch Tab ")
+            Paragraph::new(" H/L: Switch Tab                    /: Search ")
                 .block(status_block.clone())
                 .centered(),
             status_area,
@@ -261,7 +268,7 @@ impl App {
                         .block(results_block)
                         .highlight_style(Color::Blue),
                     results_area,
-                    &mut self.resultlist_state,
+                    &mut self.queuelist_state,
                 );
             }
         }
@@ -273,16 +280,12 @@ impl App {
                     .content(format!(" {}", self.search_query))
                     .title(" Search ");
                 frame.render_widget(search, search_area);
-            }
-            Mode::NowPlaying => {
-
-                //    Gauge::default()
-                //        .block(status_block)
-                //        .percent(29)
-                //        .label(String::new())
-                //        .gauge_style(Color::Red)
-                //        .render(status_area, frame.buffer_mut());
-            }
+            } //    Gauge::default()
+              //        .block(status_block)
+              //        .percent(29)
+              //        .label(String::new())
+              //        .gauge_style(Color::Red)
+              //        .render(status_area, frame.buffer_mut());
         }
     }
 
@@ -300,8 +303,8 @@ impl App {
             let _ = tx.send(out);
         });
 
-        // self.is_loading is set to false in check_search_results for obvious reasons. (Because is
-        // loading doesn't stop until check search results is completed)
+        // self.is_loading is set to false in check_search_results for obvious reasons. (Because
+        // is_loading doesn't stop until check search results is completed)
     }
     async fn perform_search(query: String) -> color_eyre::Result<Vec<Video>> {
         let options = tokio::process::Command::new("yt-dlp")
@@ -364,15 +367,15 @@ impl App {
         Ok(())
     }
 
-    fn play_video(&mut self) -> color_eyre::Result<()> {
-        self.mode = Mode::NowPlaying;
-        if fs::exists("/tmp/mpv-socket").unwrap()
-            && let Err(e) = fs::remove_file("/tmp/mpv-socket")
-        {
-            eprintln!("Could not remove ipc file /tmp/mpv-socket: {e}");
+    fn play_video(&mut self, screen: Screen) -> color_eyre::Result<()> {
+        if self.is_nowplaying {
+            self.kill_mpv();
         }
+        self.is_nowplaying = true;
 
-        if let Some(index) = self.resultlist_state.selected() {
+        if screen == Screen::Results
+            && let Some(index) = self.resultlist_state.selected()
+        {
             self.now_playing = self.video_list[index].clone();
             let child = Command::new("mpv")
                 .arg("--ytdl-format=bestaudio")
@@ -387,22 +390,43 @@ impl App {
                 .stdin(Stdio::null())
                 .spawn()?;
             self.child_process = Some(child);
+        } else if screen == Screen::Queue
+            && let Some(index) = self.queuelist_state.selected()
+        {
+            self.now_playing = self.queuelist[index].clone();
+            let child = Command::new("mpv")
+                .arg("--ytdl-format=bestaudio")
+                .arg(format!(
+                    "https://www.youtube.com/watch?v={}",
+                    self.queuelist[index].id
+                ))
+                .arg("--no-video")
+                .arg("--input-ipc-server=/tmp/mpv-socket")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .stdin(Stdio::null())
+                .spawn()?;
+            self.child_process = Some(child);
         }
 
+        self.mpv_connect_attempts = 10;
         //TEMP SOLUTION FIND BETTER WAY TO CHECK IF IPC LOADED
-        for _ in 0..3 {
-            thread::sleep(time::Duration::from_millis(500));
-            match UnixStream::connect("/tmp/mpv-socket") {
-                Ok(o) => {
-                    self.mpv_stream = Some(o);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("Could not connect mpv-socket: {e}");
-                }
+        Ok(())
+    }
+
+    fn try_connect_mpv(&mut self) {
+        if self.mpv_connect_attempts == 0 {
+            return;
+        }
+        match UnixStream::connect("/tmp/mpv-socket") {
+            Ok(o) => {
+                self.mpv_stream = Some(o);
+                self.mpv_connect_attempts = 0;
+            }
+            Err(_) => {
+                self.mpv_connect_attempts -= 1;
             }
         }
-        Ok(())
     }
 
     fn send_mpv_command(&mut self, args: Vec<&str>) -> color_eyre::Result<()> {
@@ -411,13 +435,32 @@ impl App {
             vec_args.push(format!("\"{}\"", arg));
         }
         let json_args = vec_args.join(",");
-        let message = format!("{{\"command\": [{json_args}])\n");
+        let message = format!("{{\"command\": [{json_args}]}}\n");
         if let Some(ref mut stream) = self.mpv_stream
             && let Err(e) = stream.write_all(message.as_bytes())
         {
-            println!("Could not write to UnixStream at send_mpv_command(): {e} ");
+            eprintln!("Could not write to UnixStream at send_mpv_command(): {e} ");
         }
         Ok(())
+    }
+
+    fn kill_mpv(&mut self) {
+        self.mpv_stream.take();
+
+        if let Some(ref mut child) = self.child_process {
+            if let Err(e) = child.kill() {
+                eprintln!("Could not kill child, need idf: {e}");
+            }
+            if let Err(e) = child.wait() {
+                eprintln!("Could not wait on child: {e}");
+            }
+        }
+        self.child_process = None;
+        if let Err(e) = fs::remove_file("/tmp/mpv-socket")
+            && e.kind() != ErrorKind::NotFound
+        {
+            eprintln!("Could not remove /tmp/mpv-socket file: {e}");
+        }
     }
 
     fn tabs_choose(&mut self, screen: Screen) {
@@ -495,8 +538,13 @@ impl App {
     fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
         match self.mode {
             Mode::Search => match key.code {
-                KeyCode::Char('q' | 'Q') => self.quit(),
-                KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => self.quit(),
+                KeyCode::Char('c' | 'C') => {
+                    if key.modifiers == KeyModifiers::CONTROL {
+                        self.quit()
+                    } else {
+                        self.search_query.push('c');
+                    }
+                }
                 KeyCode::Char(ch) => self.search_query.push(ch),
                 KeyCode::Backspace => {
                     self.search_query.pop();
@@ -531,8 +579,9 @@ impl App {
                         KeyCode::Char('j') => self.resultlist_state.select_next(),
                         KeyCode::Char('k') => self.resultlist_state.select_previous(),
                         KeyCode::Enter => {
-                            self.play_video()?;
+                            self.play_video(Screen::Results)?;
                             self.queuelist.push(self.now_playing.clone());
+                            self.tabs_choose(Screen::Queue);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
                         _ => {}
@@ -553,41 +602,39 @@ impl App {
                         }
                         KeyCode::Char('j') => self.queuelist_state.select_next(),
                         KeyCode::Char('k') => self.queuelist_state.select_previous(),
-                        KeyCode::Enter => self.play_video()?,
+                        KeyCode::Enter => self.play_video(Screen::Queue)?,
                         KeyCode::Char('/') => self.mode = Mode::Search,
+                        KeyCode::Esc | KeyCode::Char('s') => {
+                            Video::stop(self)?;
+                            self.mode = Mode::Default;
+                        }
+                        KeyCode::Char('9') => {
+                            if self.is_nowplaying {
+                                Video::decrease_volume(self)?;
+                                Video::get_current_volume(self)?;
+                            }
+                        }
+                        KeyCode::Char('0') => {
+                            if self.is_nowplaying {
+                                Video::increase_volume(self)?;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            if self.is_nowplaying {
+                                Video::play_pause(self)?;
+                            }
+                        }
                         _ => {}
                     }
                 }
             }
-            Mode::NowPlaying => match key.code {
-                KeyCode::Char('H') => self.tabs_next(),
-                KeyCode::Char('L') => self.tabs_previous(),
-                KeyCode::Esc | KeyCode::Char('s') => {
-                    Video::stop(self)?;
-                    self.mode = Mode::Default;
-                }
-                KeyCode::Char('9') => {
-                    Video::decrease_volume(self)?;
-                    Video::get_current_volume(self)?;
-                }
-                KeyCode::Char('0') => {
-                    Video::increase_volume(self)?;
-                    Video::get_current_volume(self)?;
-                }
-                KeyCode::Char(' ') => Video::play_pause(self)?,
-                _ => {}
-            },
         }
         Ok(())
     }
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
-        if let Some(ref mut child) = self.child_process
-            && let Err(e) = child.kill()
-        {
-            eprintln!("Could not kill child: {e}"); /* Call IDF */
-        }
+        self.kill_mpv();
         self.running = false;
     }
 }
