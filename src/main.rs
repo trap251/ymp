@@ -6,9 +6,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{
-        Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Tabs, Widget, Wrap,
-    },
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Widget, Wrap},
 };
 use serde::Deserialize;
 use std::{
@@ -28,29 +26,6 @@ async fn main() -> color_eyre::Result<()> {
     let result = App::new().run(terminal).await;
     ratatui::restore();
     result
-}
-
-/// The main application which holds the state and logic of the application.
-#[derive(Debug, Default)]
-struct App {
-    /// Is the application running?
-    running: bool,
-    //menulist_state: ListState,
-    resultlist_state: ListState,
-
-    mode: Mode,
-    search_query: String,
-    video_list: Vec<Video>,
-    tabs_titles: Vec<&'static str>,
-    tabs_current: usize,
-    child_process: Option<Child>,
-    mpv_stream: Option<UnixStream>,
-    now_playing: Video,
-
-    // tokio  search-related stuff
-    is_loading: bool,
-    search_rx: Option<mpsc::UnboundedReceiver<color_eyre::Result<Vec<Video>>>>, //receives search
-                                                                                //results
 }
 
 #[derive(Debug, Default, Setters)]
@@ -115,6 +90,28 @@ enum Mode {
     Search,
     Results,
     NowPlaying,
+}
+
+/// The main application which holds the state and logic of the application.
+#[derive(Debug, Default)]
+struct App {
+    /// Is the application running?
+    running: bool,
+    //menulist_state: ListState,
+    resultlist_state: ListState,
+
+    mode: Mode,
+    search_query: String,
+    video_list: Vec<Video>,
+    tabs_titles: Vec<&'static str>,
+    tabs_current: usize,
+    child_process: Option<Child>,
+    mpv_stream: Option<UnixStream>,
+    now_playing: Video,
+
+    // tokio  search-related stuff
+    is_loading: bool, // In-case I want to add a leading screen
+    search_rx: Option<mpsc::UnboundedReceiver<color_eyre::Result<Vec<Video>>>>, //receives search results
 }
 
 impl App {
@@ -208,6 +205,23 @@ impl App {
                 .centered(),
             status_area,
         );
+        let items: Vec<ListItem> = self
+            .video_list
+            .iter()
+            .map(|video| {
+                ListItem::new(Span::styled(
+                    format!("{:<40} uploader: {}", video.title, video.uploader,),
+                    ratatui::style::Style::default().fg(ratatui::style::Color::Gray),
+                ))
+            })
+            .collect();
+        frame.render_stateful_widget(
+            List::new(items)
+                .block(results_block)
+                .highlight_style(Color::Blue),
+            results_area,
+            &mut self.resultlist_state,
+        );
 
         match self.mode {
             Mode::Search => {
@@ -216,40 +230,16 @@ impl App {
                     .title(" Search ");
                 frame.render_widget(search, search_area);
             }
-            Mode::Results => {
-                if self.is_loading {
-                    frame.render_widget(
-                        Paragraph::new("Results loading rn icl...").block(results_block.clone()),
-                        results_area,
-                    );
-                } else {
-                    let items: Vec<ListItem> = self
-                        .video_list
-                        .iter()
-                        .map(|video| {
-                            ListItem::new(Span::styled(
-                                format!("{:<40} uploader: {}", video.title, video.uploader,),
-                                ratatui::style::Style::default().fg(ratatui::style::Color::Gray),
-                            ))
-                        })
-                        .collect();
+            Mode::Results => {}
+            Mode::NowPlaying => {
 
-                    frame.render_stateful_widget(
-                        List::new(items)
-                            .block(results_block)
-                            .highlight_style(Color::Blue),
-                        results_area,
-                        &mut self.resultlist_state,
-                    );
-                    Gauge::default()
-                        .block(status_block)
-                        .percent(29)
-                        .label(String::new())
-                        .gauge_style(Color::Red)
-                        .render(status_area, frame.buffer_mut());
-                }
+                //    Gauge::default()
+                //        .block(status_block)
+                //        .percent(29)
+                //        .label(String::new())
+                //        .gauge_style(Color::Red)
+                //        .render(status_area, frame.buffer_mut());
             }
-            Mode::NowPlaying => {}
         }
     }
 
