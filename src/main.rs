@@ -1,3 +1,4 @@
+// Fix: Screens and Tabs logic. fix App::tabs_choose().
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use derive_setters::Setters;
 use ratatui::{
@@ -86,9 +87,8 @@ impl Video {
 #[derive(Debug, Default, PartialEq)]
 enum Mode {
     #[default]
-    //Menu,
+    Default,
     Search,
-    Results,
     NowPlaying,
 }
 
@@ -99,11 +99,14 @@ struct App {
     running: bool,
     //menulist_state: ListState,
     resultlist_state: ListState,
+    queuelist: Vec<Video>,
+    queuelist_state: ListState,
 
     mode: Mode,
+    screen: Screen,
     search_query: String,
     video_list: Vec<Video>,
-    tabs_titles: Vec<&'static str>,
+    pub tabs_titles: Vec<&'static str>,
     tabs_current: usize,
     child_process: Option<Child>,
     mpv_stream: Option<UnixStream>,
@@ -114,16 +117,27 @@ struct App {
     search_rx: Option<mpsc::UnboundedReceiver<color_eyre::Result<Vec<Video>>>>, //receives search results
 }
 
+#[derive(Debug, Default, PartialEq)]
+enum Screen {
+    #[default]
+    //Menu,
+    Queue,
+    Results,
+}
+
 impl App {
     /// Construct a new instance of [`App`].
     fn default() -> Self {
         let running = true;
         //let menulist_state = ListState::default().with_selected(Some(0));
         let resultlist_state = ListState::default().with_selected(Some(0));
+        let queuelist = Vec::new();
+        let queuelist_state = ListState::default().with_selected(Some(0));
         let mode = Mode::default();
+        let screen = Screen::default();
         let search_query = String::default();
         let video_list = Vec::new();
-        let tabs_titles = vec!["Search", "Queue"];
+        let tabs_titles = vec!["Queue", "Results"];
         let tabs_current: usize = 0;
         let child_process: Option<Child> = None;
         let mpv_stream: Option<UnixStream> = None;
@@ -135,9 +149,12 @@ impl App {
             running,
             //menulist_state,
             mode,
+            screen,
             search_query,
             video_list,
             resultlist_state,
+            queuelist_state,
+            queuelist,
             tabs_titles,
             tabs_current,
             child_process,
@@ -175,17 +192,13 @@ impl App {
         .areas(frame.area());
 
         let [search_area] = Layout::vertical([Constraint::Length(3)]).areas(frame.area());
-        let [results_block, status_block] =
-            [Block::bordered().title(" Results "), Block::bordered()];
+        let [results_block, status_block] = [Block::bordered(), Block::bordered()];
 
         let tabs = Tabs::new(self.tabs_titles.clone())
             .select(Some(self.tabs_current))
             .highlight_style(Color::Green);
 
         tabs.render(tabs_area, frame.buffer_mut());
-
-        frame.render_widget(results_block.clone(), results_area);
-
         frame.render_widget(
             Paragraph::new(" j/k: Scroll ")
                 .block(status_block.clone())
@@ -205,32 +218,62 @@ impl App {
                 .centered(),
             status_area,
         );
-        let items: Vec<ListItem> = self
-            .video_list
-            .iter()
-            .map(|video| {
-                ListItem::new(Span::styled(
-                    format!("{:<40} uploader: {}", video.title, video.uploader,),
-                    ratatui::style::Style::default().fg(ratatui::style::Color::Gray),
-                ))
-            })
-            .collect();
-        frame.render_stateful_widget(
-            List::new(items)
-                .block(results_block)
-                .highlight_style(Color::Blue),
-            results_area,
-            &mut self.resultlist_state,
-        );
+
+        match self.screen {
+            Screen::Results => {
+                let items: Vec<ListItem> = self
+                    .video_list
+                    .iter()
+                    .map(|video| {
+                        ListItem::new(Span::styled(
+                            format!("{:<40} uploader: {}", video.title, video.uploader,),
+                            ratatui::style::Style::default().fg(ratatui::style::Color::Gray),
+                        ))
+                    })
+                    .collect();
+
+                frame.render_widget(results_block.clone(), results_area);
+
+                frame.render_stateful_widget(
+                    List::new(items)
+                        .block(results_block)
+                        .highlight_style(Color::Blue),
+                    results_area,
+                    &mut self.resultlist_state,
+                );
+            }
+            Screen::Queue => {
+                let items: Vec<ListItem> = self
+                    .queuelist
+                    .iter()
+                    .map(|video| {
+                        ListItem::new(Span::styled(
+                            format!("{:<40} uploader: {}", video.title, video.uploader,),
+                            ratatui::style::Style::default().fg(ratatui::style::Color::Gray),
+                        ))
+                    })
+                    .collect();
+
+                frame.render_widget(results_block.clone(), results_area);
+
+                frame.render_stateful_widget(
+                    List::new(items)
+                        .block(results_block)
+                        .highlight_style(Color::Blue),
+                    results_area,
+                    &mut self.resultlist_state,
+                );
+            }
+        }
 
         match self.mode {
+            Mode::Default => {}
             Mode::Search => {
                 let search = Popup::default()
                     .content(format!(" {}", self.search_query))
                     .title(" Search ");
                 frame.render_widget(search, search_area);
             }
-            Mode::Results => {}
             Mode::NowPlaying => {
 
                 //    Gauge::default()
@@ -377,11 +420,21 @@ impl App {
         Ok(())
     }
 
-    fn tabs_next_index(&mut self) {
+    fn tabs_choose(&mut self, screen: Screen) {
+        if screen == Screen::Queue {
+            self.screen = Screen::Queue;
+            self.tabs_current = 0;
+        } else if screen == Screen::Results {
+            self.screen = Screen::Results;
+            self.tabs_current = 1;
+        }
+    }
+
+    fn tabs_next(&mut self) {
         self.tabs_current = (self.tabs_current + 1) % self.tabs_titles.len();
     }
 
-    fn tabs_previous_index(&mut self) {
+    fn tabs_previous(&mut self) {
         if self.tabs_current > 0 {
             self.tabs_current -= 1;
         } else {
@@ -450,27 +503,68 @@ impl App {
                 }
                 KeyCode::Enter => {
                     self.search();
-                    self.mode = Mode::Results;
+                    self.search_query = String::new();
+                    self.mode = Mode::Default;
+                    self.tabs_choose(Screen::Results);
+                }
+                KeyCode::Esc => {
+                    self.search_query = String::new();
+                    self.mode = Mode::Default;
                 }
                 _ => {}
             },
-            Mode::Results => match key.code {
-                KeyCode::Char('q' | 'Q') => self.quit(),
-                KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => self.quit(),
-                KeyCode::Char('H') => self.tabs_next_index(),
-                KeyCode::Char('L') => self.tabs_previous_index(),
-                KeyCode::Char('j') => self.resultlist_state.select_next(),
-                KeyCode::Char('k') => self.resultlist_state.select_previous(),
-                KeyCode::Enter => self.play_video()?,
-                KeyCode::Char('/') => self.mode = Mode::Search,
-                _ => {}
-            },
+            Mode::Default => {
+                if self.screen == Screen::Results {
+                    match key.code {
+                        KeyCode::Char('q' | 'Q') => self.quit(),
+                        KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.quit()
+                        }
+                        KeyCode::Char('H') => {
+                            self.tabs_next();
+                            self.screen = Screen::Queue
+                        }
+                        KeyCode::Char('L') => {
+                            self.tabs_previous();
+                            self.screen = Screen::Queue
+                        }
+                        KeyCode::Char('j') => self.resultlist_state.select_next(),
+                        KeyCode::Char('k') => self.resultlist_state.select_previous(),
+                        KeyCode::Enter => {
+                            self.play_video()?;
+                            self.queuelist.push(self.now_playing.clone());
+                        }
+                        KeyCode::Char('/') => self.mode = Mode::Search,
+                        _ => {}
+                    }
+                } else if self.screen == Screen::Queue {
+                    match key.code {
+                        KeyCode::Char('q' | 'Q') => self.quit(),
+                        KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.quit()
+                        }
+                        KeyCode::Char('H') => {
+                            self.tabs_next();
+                            self.screen = Screen::Results;
+                        }
+                        KeyCode::Char('L') => {
+                            self.tabs_previous();
+                            self.screen = Screen::Results;
+                        }
+                        KeyCode::Char('j') => self.queuelist_state.select_next(),
+                        KeyCode::Char('k') => self.queuelist_state.select_previous(),
+                        KeyCode::Enter => self.play_video()?,
+                        KeyCode::Char('/') => self.mode = Mode::Search,
+                        _ => {}
+                    }
+                }
+            }
             Mode::NowPlaying => match key.code {
-                KeyCode::Char('H') => self.tabs_next_index(),
-                KeyCode::Char('L') => self.tabs_previous_index(),
+                KeyCode::Char('H') => self.tabs_next(),
+                KeyCode::Char('L') => self.tabs_previous(),
                 KeyCode::Esc | KeyCode::Char('s') => {
                     Video::stop(self)?;
-                    self.mode = Mode::Results;
+                    self.mode = Mode::Default;
                 }
                 KeyCode::Char('9') => {
                     Video::decrease_volume(self)?;
