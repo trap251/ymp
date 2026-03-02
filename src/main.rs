@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{
         Color, Style, Stylize,
-        palette::material::{AccentedPalette, BLUE},
+        palette::material::{self, AccentedPalette, BLUE},
     },
     text::{Line, Span, Text},
     widgets::{
@@ -27,10 +27,10 @@ use tokio::sync::mpsc;
 
 // Color Scheme
 const COLOR_SCHEME: AccentedPalette = BLUE;
-const TEXT_FG: Color = COLOR_SCHEME.c100;
-const SUBTEXT_FG: Color = COLOR_SCHEME.c900;
-const HIGHLIGHT_FG: Color = COLOR_SCHEME.c100;
-const HIGHLIGHT_BG: Color = COLOR_SCHEME.c900;
+const SUBTEXT_FG: Color = COLOR_SCHEME.c600;
+const HIGHLIGHT_FG: Color = material::BLACK;
+const HIGHLIGHT_BG: Color = COLOR_SCHEME.a100;
+const BORDER_FG: Color = COLOR_SCHEME.a100;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -70,7 +70,7 @@ struct App {
     mode: Mode,
     screen: Screen,
     search_query: String,
-    pub tabs_titles: Vec<Line<'static>>,
+    pub tabs_titles: Vec<&'static str>,
     tabs_current: usize,
     child_process: Option<Child>,
     mpv_stream: Option<UnixStream>,
@@ -94,10 +94,7 @@ impl App {
         let mode = Mode::default();
         let screen = Screen::default();
         let search_query = String::default();
-        let tabs_titles = vec![
-            (" Queue ").fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).into(),
-            (" Results ").fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).into(),
-        ];
+        let tabs_titles = vec!["     Queue     ", "     Results     "];
         let tabs_current: usize = 0;
         let child_process: Option<Child> = None;
         let mpv_stream: Option<UnixStream> = None;
@@ -297,24 +294,45 @@ impl App {
             Constraint::Percentage(33),
         ])
         .areas(status_area);
+
+        let block_border_type = BorderType::Rounded;
+        let block_border_style = Style::new().fg(BORDER_FG);
+        let (left_block, center_block, right_block) = (
+            Block::new()
+                .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
+                .border_type(block_border_type)
+                .border_style(block_border_style),
+            Block::new()
+                .borders(Borders::TOP | Borders::BOTTOM)
+                .border_type(block_border_type)
+                .border_style(block_border_style),
+            Block::new()
+                .borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
+                .border_type(block_border_type)
+                .border_style(block_border_style),
+        );
         frame.render_widget(
-            Paragraph::new(" j/k: Scroll ").left_aligned().fg(TEXT_FG),
+            Paragraph::new(" j/k: Scroll ")
+                .left_aligned()
+                .block(left_block),
             status_area_left,
         );
         frame.render_widget(
             Paragraph::new(" H/L: Switch Tab ")
                 .left_aligned()
-                .fg(TEXT_FG),
+                .block(center_block.clone()),
             status_area_center,
         );
         frame.render_widget(
-            Paragraph::new(" /: Search ").right_aligned().fg(TEXT_FG),
+            Paragraph::new(" /: Search ")
+                .right_aligned()
+                .block(center_block),
             status_area_center,
         );
         frame.render_widget(
             Paragraph::new(" Enter: Play Video ")
                 .right_aligned()
-                .fg(TEXT_FG),
+                .block(right_block),
             status_area_right,
         );
 
@@ -328,24 +346,23 @@ impl App {
         videolist: &[Video],
     ) {
         //content
+        let content_block_type = BorderType::Rounded;
+        let content_block_style = Style::new().fg(BORDER_FG);
         let [content_block] = [Block::bordered()
-            .border_type(ratatui::widgets::BorderType::Rounded)
-            .border_style(Style::new().fg(TEXT_FG))
+            .border_type(content_block_type)
+            .border_style(content_block_style)
             .padding(Padding::horizontal(1))];
 
         let items: Vec<ListItem> = videolist
             .iter()
             .map(|video| {
                 ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!(
-                            "{:<1$}",
-                            video.title,
-                            (content_area.width as usize).saturating_sub(30)
-                        ),
-                        Style::new().fg(TEXT_FG),
-                    ),
-                    Span::styled(" | ", Style::new().fg(TEXT_FG).dim()),
+                    Span::from(format!(
+                        "{:<1$}",
+                        video.title,
+                        (content_area.width as usize).saturating_sub(30)
+                    )),
+                    Span::styled(" | ", Style::new().dim()),
                     Span::styled(&video.uploader, Style::new().fg(SUBTEXT_FG)),
                 ]))
             })
@@ -365,20 +382,33 @@ impl App {
     }
 
     fn render_header(&self, frame: &mut Frame<'_>, header_area: Rect) {
-        //header
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(header_area);
+        let block_type = BorderType::Rounded;
+        let block_style = Style::new().fg(BORDER_FG);
+        let left_block = Block::new()
+            .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
+            .border_type(block_type)
+            .border_style(block_style);
+        let right_block = Block::new()
+            .borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
+            .border_type(block_type)
+            .border_style(block_style);
 
         let tabs = Tabs::new(self.tabs_titles.clone())
             .padding("", "")
             .divider("")
+            .block(left_block.clone())
+            .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).bold())
             .select(Some(self.tabs_current));
 
         let now_playing = if self.is_nowplaying {
-            Paragraph::new(String::from(&self.now_playing.title))
+            Paragraph::new(String::from(&self.now_playing.title)).block(right_block.clone())
         } else {
-            Paragraph::new(String::from(&self.now_playing.title)).italic()
+            Paragraph::new(String::from(&self.now_playing.title))
+                .block(right_block)
+                .italic()
         };
 
         frame.render_widget(tabs, left);
@@ -407,7 +437,7 @@ impl App {
             .title(" Search ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(TEXT_FG).dim())
+            .border_style(Style::new().dim())
             .padding(Padding::horizontal(1));
         frame.render_widget(search, search_area);
         //------------search
