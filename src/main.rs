@@ -432,12 +432,16 @@ impl App {
         ])
         .areas(search_area);
 
+        let border_type = BorderType::Rounded;
+        let border_style = Style::new().fg(BORDER_FG).dim();
+        let title_style = Style::new().fg(BORDER_FG).bold().dim();
         let search = Popup::default()
             .content(format!(" {}", self.search_query))
             .title(" Search ")
+            .title_style(title_style)
             .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::new().dim())
+            .border_type(border_type)
+            .border_style(border_style)
             .padding(Padding::horizontal(1));
         frame.render_widget(search, search_area);
         //------------search
