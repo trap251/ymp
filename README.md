@@ -22,7 +22,7 @@ Or manually:
 1. yt-dlp (For YouTube search)
 2. mpv (For media playback)
 
-I use arch btw, but this should work on any linux distro.
+I use arch (btw), but this should work on any linux distro.
 
 ## Controls
 

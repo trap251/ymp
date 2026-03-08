@@ -15,7 +15,7 @@ use ratatui::{
         Widget, Wrap,
     },
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{ErrorKind, Write},
@@ -31,6 +31,9 @@ const SUBTEXT_FG: Color = COLOR_SCHEME.c600;
 const HIGHLIGHT_FG: Color = material::BLACK;
 const HIGHLIGHT_BG: Color = COLOR_SCHEME.a100;
 const BORDER_FG: Color = COLOR_SCHEME.a100;
+
+// queuelist is saved here
+const QUEUELIST_PATH: &str = "/home/trap/.local/share/ymp/queuelist.json";
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -133,6 +136,7 @@ impl App {
     async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         //self.check_dependency("yt-dlp");
         self.running = true;
+        self.retrieve_queue()?;
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
             self.check_search_results()?;
@@ -235,6 +239,7 @@ impl App {
                         KeyCode::Enter => {
                             self.play_video(Screen::Results)?;
                             self.queuelist.push(self.now_playing.clone());
+                            self.save_queue()?;
                             self.tabs_choose(Screen::Queue);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
@@ -245,6 +250,10 @@ impl App {
                         KeyCode::Char('q' | 'Q') => self.quit(),
                         KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
                             self.quit()
+                        }
+                        KeyCode::Char('C') => {
+                            self.queuelist.clear();
+                            self.save_queue()?;
                         }
                         KeyCode::Char('H') => {
                             self.tabs_next();
@@ -314,24 +323,28 @@ impl App {
         frame.render_widget(
             Paragraph::new(" j/k: Scroll ")
                 .left_aligned()
+                .fg(BORDER_FG)
                 .block(left_block),
             status_area_left,
         );
         frame.render_widget(
             Paragraph::new(" H/L: Switch Tab ")
                 .left_aligned()
+                .fg(BORDER_FG)
                 .block(center_block.clone()),
             status_area_center,
         );
         frame.render_widget(
             Paragraph::new(" /: Search ")
                 .right_aligned()
+                .fg(BORDER_FG)
                 .block(center_block),
             status_area_center,
         );
         frame.render_widget(
             Paragraph::new(" Enter: Play Video ")
                 .right_aligned()
+                .fg(BORDER_FG)
                 .block(right_block),
             status_area_right,
         );
@@ -546,7 +559,6 @@ impl App {
                 "https://www.youtube.com/watch?v={}",
                 self.now_playing.id
             ))
-            .arg("--no-video")
             .arg("--input-ipc-server=/tmp/mpv-socket")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -629,6 +641,22 @@ impl App {
             self.tabs_current = self.tabs_titles.len() - 1;
         }
     }
+    fn save_queue(&self) -> color_eyre::Result<()> {
+        if let Some((path, _filename)) = QUEUELIST_PATH.rsplit_once("/") {
+            fs::DirBuilder::new().recursive(true).create(path)?;
+        }
+        let queuelist_json = serde_json::to_string_pretty(&self.queuelist)?;
+        fs::write(QUEUELIST_PATH, queuelist_json)?;
+        Ok(())
+    }
+
+    fn retrieve_queue(&mut self) -> color_eyre::Result<()> {
+        if fs::exists(QUEUELIST_PATH)? {
+            let queuelist = fs::read_to_string(QUEUELIST_PATH)?;
+            self.queuelist = serde_json::from_str(queuelist.as_str())?;
+        }
+        Ok(())
+    }
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
@@ -670,7 +698,7 @@ impl Widget for Popup<'_> {
     }
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Video {
     id: String,
     title: String,
