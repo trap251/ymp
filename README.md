@@ -2,6 +2,9 @@
 
 YouTube Media Player. Browse and play YouTube music/audio from the terminal.
 
+## Important!
+This is not like a normal music player. Searching and Playing are not instant as it needs to fetch results for search and then use mpv to stream directly with the video's link. This doesn't store anything locally, so far. I needed this tool personally so I published it, in case someone else needs it as well <3
+
 ## Installation (Linux)
 
 Run this command:
