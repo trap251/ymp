@@ -52,6 +52,13 @@ enum Mode {
 }
 
 #[derive(Debug, Default, PartialEq)]
+enum PlaybackMode {
+    #[default]
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Default, PartialEq)]
 enum Screen {
     #[default]
     //Menu,
@@ -71,6 +78,7 @@ struct App {
     queuelist_state: ListState,
 
     mode: Mode,
+    playback_mode: PlaybackMode,
     screen: Screen,
     search_query: String,
     pub tabs_titles: Vec<&'static str>,
@@ -95,6 +103,7 @@ impl App {
         let queuelist = Vec::new();
         let queuelist_state = ListState::default().with_selected(Some(0));
         let mode = Mode::default();
+        let playback_mode = PlaybackMode::Audio;
         let screen = Screen::default();
         let search_query = String::default();
         let tabs_titles = vec!["     Queue     ", "     Results     "];
@@ -111,6 +120,7 @@ impl App {
             running,
             //menulist_state,
             mode,
+            playback_mode,
             screen,
             search_query,
             resultlist,
@@ -243,6 +253,7 @@ impl App {
                             self.tabs_choose(Screen::Queue);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
+                        KeyCode::Char('m') => self.playback_mode_switch(),
                         _ => {}
                     }
                 } else if self.screen == Screen::Queue {
@@ -267,6 +278,7 @@ impl App {
                         KeyCode::Char('k') => self.queuelist_state.select_previous(),
                         KeyCode::Enter => self.play_video(Screen::Queue)?,
                         KeyCode::Char('/') => self.mode = Mode::Search,
+                        KeyCode::Char('m') => self.playback_mode_switch(),
                         KeyCode::Esc | KeyCode::Char('s') => {
                             Video::stop(self)?;
                             self.mode = Mode::Default;
@@ -320,13 +332,26 @@ impl App {
                 .border_type(block_border_type)
                 .border_style(block_border_style),
         );
-        frame.render_widget(
-            Paragraph::new(" j/k: Scroll ")
-                .left_aligned()
-                .fg(BORDER_FG)
-                .block(left_block),
-            status_area_left,
-        );
+        match self.playback_mode {
+            PlaybackMode::Audio => {
+                frame.render_widget(
+                    Paragraph::new(" Mode: [Audio] ")
+                        .left_aligned()
+                        .fg(BORDER_FG)
+                        .block(left_block),
+                    status_area_left,
+                );
+            }
+            PlaybackMode::Video => {
+                frame.render_widget(
+                    Paragraph::new(" Mode: [Video] ")
+                        .left_aligned()
+                        .fg(BORDER_FG)
+                        .block(left_block),
+                    status_area_left,
+                );
+            }
+        }
         frame.render_widget(
             Paragraph::new(" H/L: Switch Tab ")
                 .left_aligned()
@@ -553,18 +578,31 @@ impl App {
             self.now_playing = list[index].clone();
         }
 
-        let child = Command::new("mpv")
-            .arg("--ytdl-format=bestaudio")
-            .arg(format!(
-                "https://www.youtube.com/watch?v={}",
-                self.now_playing.id
-            ))
-            .arg("--input-ipc-server=/tmp/mpv-socket")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .spawn()?;
-        self.child_process = Some(child);
+        match self.playback_mode {
+            PlaybackMode::Audio => {
+                let child = Command::new("mpv")
+                    .arg("--ytdl-format=bestaudio")
+                    .arg(format!(
+                        "https://www.youtube.com/watch?v={}",
+                        self.now_playing.id
+                    ))
+                    .arg("--input-ipc-server=/tmp/mpv-socket")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .stdin(Stdio::null())
+                    .spawn()?;
+                self.child_process = Some(child);
+            }
+            PlaybackMode::Video => {
+                let child = Command::new("mpv")
+                    .arg(format!(
+                        "https://www.youtube.com/watch?v={}",
+                        self.now_playing.id
+                    ))
+                    .spawn()?;
+                self.child_process = Some(child);
+            }
+        }
 
         self.mpv_connect_attempts = 10;
         //TEMP SOLUTION FIND BETTER WAY TO CHECK IF IPC LOADED
@@ -627,6 +665,14 @@ impl App {
         } else if screen == Screen::Results {
             self.screen = Screen::Results;
             self.tabs_current = 1;
+        }
+    }
+
+    fn playback_mode_switch(&mut self) {
+        if self.playback_mode == PlaybackMode::Audio {
+            self.playback_mode = PlaybackMode::Video;
+        } else {
+            self.playback_mode = PlaybackMode::Audio;
         }
     }
 
