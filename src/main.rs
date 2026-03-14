@@ -599,6 +599,8 @@ impl App {
                         "https://www.youtube.com/watch?v={}",
                         self.now_playing.id
                     ))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .spawn()?;
                 self.child_process = Some(child);
             }
