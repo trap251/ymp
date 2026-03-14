@@ -353,21 +353,21 @@ impl App {
             }
         }
         frame.render_widget(
-            Paragraph::new(" H/L: Switch Tab ")
+            Paragraph::new("  ")
                 .left_aligned()
                 .fg(BORDER_FG)
                 .block(center_block.clone()),
             status_area_center,
         );
         frame.render_widget(
-            Paragraph::new(" /: Search ")
+            Paragraph::new("  ")
                 .right_aligned()
                 .fg(BORDER_FG)
                 .block(center_block),
             status_area_center,
         );
         frame.render_widget(
-            Paragraph::new(" Enter: Play Video ")
+            Paragraph::new("  ")
                 .right_aligned()
                 .fg(BORDER_FG)
                 .block(right_block),
