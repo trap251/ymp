@@ -8,25 +8,27 @@ This is not like a normal music player. Searching and Playing are not instant as
 
 ## Installation (Linux)
 
-Run this command:
+On arch, get ymp-bin from the AUR. For example:
 
 ```
-curl -fL "https://github.com/trap251/ymp/releases/latest/download/ymp" -o /tmp/ymp \
-  && sudo install -m 755 /tmp/ymp /usr/local/bin/ymp
+yay -S ymp-bin
 ```
 
 Or manually:
+
 
 1. Download the latest ymp binary from [releases](https://github.com/trap251/ymp/releases)
 2. Place it in the binaries folder i.e. ~/.local/bin/ or /usr/local/bin/
 3. Run 'ymp' in the terminal to use the application
 
-#### Make sure to have the following dependencies installed:
+#### Dependencies:
 
 1. yt-dlp (For YouTube search)
 2. mpv (For media playback)
 
 I use arch (btw), but this should work on any linux distro.
+
+#### In case of errors, always make sure you have the latest yt-dlp version.
 
 ## Controls
 
