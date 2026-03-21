@@ -1,4 +1,4 @@
-// Fix: Screens and Tabs logic. fix App::tabs_choose().
+// Fix: Screens and Tabs logic. fix App::tabs_select().
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use derive_setters::Setters;
 use ratatui::{
@@ -17,7 +17,7 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
+    env, fs,
     io::{ErrorKind, Write},
     os::unix::net::UnixStream,
     process::{Child, Command, Stdio},
@@ -83,7 +83,7 @@ struct App {
     search_query: String,
     pub tabs_titles: Vec<&'static str>,
     tabs_current: usize,
-    child_process: Option<Child>,
+    mpv_process: Option<Child>,
     mpv_stream: Option<UnixStream>,
     mpv_connect_attempts: i8,
     now_playing: Video,
@@ -108,7 +108,7 @@ impl App {
         let search_query = String::default();
         let tabs_titles = vec!["     Queue     ", "     Results     "];
         let tabs_current: usize = 0;
-        let child_process: Option<Child> = None;
+        let mpv_process: Option<Child> = None;
         let mpv_stream: Option<UnixStream> = None;
         let mpv_connect_attempts = 0;
         let now_playing: Video = Video::default();
@@ -129,7 +129,7 @@ impl App {
             queuelist_state,
             tabs_titles,
             tabs_current,
-            child_process,
+            mpv_process,
             mpv_stream,
             mpv_connect_attempts,
             now_playing,
@@ -146,6 +146,9 @@ impl App {
     async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
         //self.check_dependency("yt-dlp");
         self.running = true;
+        if let Some(url) = env::args().nth(1) {
+            self.play_video_url(url)?;
+        }
         self.retrieve_queue()?;
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
@@ -221,7 +224,7 @@ impl App {
                     self.search();
                     self.search_query = String::new();
                     self.mode = Mode::Default;
-                    self.tabs_choose(Screen::Results);
+                    self.tabs_select(Screen::Results);
                 }
                 KeyCode::Esc => {
                     self.search_query = String::new();
@@ -250,7 +253,7 @@ impl App {
                             self.play_video(Screen::Results)?;
                             self.queuelist.push(self.now_playing.clone());
                             self.save_queue()?;
-                            self.tabs_choose(Screen::Queue);
+                            self.tabs_select(Screen::Queue);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
                         KeyCode::Char('m') => self.playback_mode_switch(),
@@ -591,7 +594,7 @@ impl App {
                     .stderr(Stdio::null())
                     .stdin(Stdio::null())
                     .spawn()?;
-                self.child_process = Some(child);
+                self.mpv_process = Some(child);
             }
             PlaybackMode::Video => {
                 let child = Command::new("mpv")
@@ -602,12 +605,42 @@ impl App {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()?;
-                self.child_process = Some(child);
+                self.mpv_process = Some(child);
             }
         }
 
         self.mpv_connect_attempts = 10;
         //TEMP SOLUTION FIND BETTER WAY TO CHECK IF IPC LOADED
+        Ok(())
+    }
+
+    fn play_video_url(&mut self, url: String) -> color_eyre::Result<()> {
+        if self.is_nowplaying {
+            self.kill_mpv();
+        }
+        self.is_nowplaying = true;
+        match self.playback_mode {
+            PlaybackMode::Audio => {
+                let child = Command::new("mpv")
+                    .arg("--ytdl-format=bestaudio")
+                    .arg(url)
+                    .arg("--input-ipc-server=/tmp/mpv-socket")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .stdin(Stdio::null())
+                    .spawn()?;
+                self.mpv_process = Some(child);
+            }
+            PlaybackMode::Video => {
+                let child = Command::new("mpv")
+                    .arg(url)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?;
+                self.mpv_process = Some(child);
+            }
+        }
+        self.mpv_connect_attempts = 10;
         Ok(())
     }
 
@@ -644,15 +677,15 @@ impl App {
     fn kill_mpv(&mut self) {
         self.mpv_stream.take();
 
-        if let Some(ref mut child) = self.child_process {
+        if let Some(ref mut child) = self.mpv_process {
             if let Err(e) = child.kill() {
-                eprintln!("Could not kill child, need idf: {e}");
+                eprintln!("Could not kill mpv child process, call idf: {e}");
             }
             if let Err(e) = child.wait() {
-                eprintln!("Could not wait on child: {e}");
+                eprintln!("Could not wait on mpv child process: {e}");
             }
         }
-        self.child_process = None;
+        self.mpv_process = None;
         if let Err(e) = fs::remove_file("/tmp/mpv-socket")
             && e.kind() != ErrorKind::NotFound
         {
@@ -660,7 +693,7 @@ impl App {
         }
     }
 
-    fn tabs_choose(&mut self, screen: Screen) {
+    fn tabs_select(&mut self, screen: Screen) {
         if screen == Screen::Queue {
             self.screen = Screen::Queue;
             self.tabs_current = 0;
