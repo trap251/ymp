@@ -15,6 +15,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 interprocess = "2.2.3"
 derive_setters = "0.1.9"
 tokio = { version = "1.49.0", features = ["full"] }
+dirs = "6.0.0"
 
 # Read the optimization guideline for more details: https://ratatui.rs/recipes/apps/release-your-app/#optimizations
 [profile.release]

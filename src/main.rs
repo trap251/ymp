@@ -20,6 +20,7 @@ use std::{
     env, fs,
     io::{ErrorKind, Write},
     os::unix::net::UnixStream,
+    path::PathBuf,
     process::{Child, Command, Stdio},
     time::Duration,
 };
@@ -33,7 +34,21 @@ const HIGHLIGHT_BG: Color = COLOR_SCHEME.a100;
 const BORDER_FG: Color = COLOR_SCHEME.a100;
 
 // queuelist is saved here
-const QUEUELIST_PATH: &str = "/home/trap/.local/share/ymp/queuelist.json";
+fn queuelist_path() -> String {
+    match dirs::data_local_dir() {
+        Some(mut path) => {
+            path.push("ymp");
+            path.push("queuelist.json");
+            path.to_string_lossy().into_owned()
+        }
+        None => {
+            let mut path = PathBuf::from(".");
+            path.push("ymp");
+            path.push("queuelist.json");
+            path.to_string_lossy().into_owned()
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -723,17 +738,18 @@ impl App {
         }
     }
     fn save_queue(&self) -> color_eyre::Result<()> {
-        if let Some((path, _filename)) = QUEUELIST_PATH.rsplit_once("/") {
+        if let Some((path, _filename)) = queuelist_path().rsplit_once("/") {
             fs::DirBuilder::new().recursive(true).create(path)?;
         }
         let queuelist_json = serde_json::to_string_pretty(&self.queuelist)?;
-        fs::write(QUEUELIST_PATH, queuelist_json)?;
+        fs::write(queuelist_path(), queuelist_json)?;
         Ok(())
     }
 
     fn retrieve_queue(&mut self) -> color_eyre::Result<()> {
-        if fs::exists(QUEUELIST_PATH)? {
-            let queuelist = fs::read_to_string(QUEUELIST_PATH)?;
+        let queuelist_path_string = queuelist_path();
+        if fs::exists(&queuelist_path_string)? {
+            let queuelist = fs::read_to_string(&queuelist_path_string)?;
             self.queuelist = serde_json::from_str(queuelist.as_str())?;
         }
         Ok(())
