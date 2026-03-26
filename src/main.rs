@@ -25,6 +25,11 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc;
+use yt_dlp::Downloader;
+use yt_dlp::client::deps::Libraries;
+
+// Settings
+const MEDIA_OUTPUT_DIRECTORY: &str = "MEDIA_OUTPUT_DIRECTORY_PLACEHOLDER";
 
 // Color Scheme
 const COLOR_SCHEME: AccentedPalette = BLUE;
@@ -165,6 +170,9 @@ impl App {
             self.play_video_url(url)?;
         }
         self.retrieve_queue()?;
+
+        let downloader = self.yt_dlp_downloader();
+
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
             self.check_search_results()?;
@@ -521,14 +529,7 @@ impl App {
         // search_is_loading doesn't stop until check search results is completed)
     }
     async fn perform_search(query: String) -> color_eyre::Result<Vec<Video>> {
-        let options = tokio::process::Command::new("yt-dlp")
-            .arg(format!("ytsearch25:{}", query))
-            .arg("--dump-json")
-            .arg("--flat-playlist")
-            .arg("--no-warnings")
-            .output()
-            .await?;
-
+        let options = 
         if !options.status.success() {
             return Err(color_eyre::eyre::eyre!(
                 "yt-dlp error: {} \nCheck if yt-dlp is latest.",
@@ -706,6 +707,15 @@ impl App {
         {
             eprintln!("Could not remove /tmp/mpv-socket file: {e}");
         }
+    }
+
+    async fn yt_dlp_downloader() -> color_eyre::Result<Downloader, Box<dyn std::error::Error>> {
+        let output_dir = PathBuf::from(MEDIA_OUTPUT_DIRECTORY);
+        let yt_dlp_path = which::which("yt-dlp").map_err(|_| "can't find yt-dlp in PATH")?;
+        let ffmpeg_path = which::which("ffmpeg").map_err(|_| "can't find ffmpeg in PATH")?;
+        let libraries = Libraries::new(yt_dlp_path, ffmpeg_path);
+        let downloader = Downloader::builder(libraries, output_dir).build().await?;
+        Ok(downloader)
     }
 
     fn tabs_select(&mut self, screen: Screen) {
