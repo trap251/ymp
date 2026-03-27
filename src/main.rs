@@ -1,4 +1,5 @@
-// Fix: Screens and Tabs logic. fix App::tabs_select().
+// TODO: Make code modular; separate parts into their own files
+// FIX: Screens and Tabs logic. fix App::tabs_select().
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use derive_setters::Setters;
 use ratatui::{
@@ -25,11 +26,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc;
-use yt_dlp::Downloader;
-use yt_dlp::client::deps::Libraries;
-
-// Settings
-const MEDIA_OUTPUT_DIRECTORY: &str = "MEDIA_OUTPUT_DIRECTORY_PLACEHOLDER";
+use yt_dlp::extractor::Youtube;
 
 // Color Scheme
 const COLOR_SCHEME: AccentedPalette = BLUE;
@@ -37,6 +34,16 @@ const SUBTEXT_FG: Color = COLOR_SCHEME.c600;
 const HIGHLIGHT_FG: Color = material::BLACK;
 const HIGHLIGHT_BG: Color = COLOR_SCHEME.a100;
 const BORDER_FG: Color = COLOR_SCHEME.a100;
+
+// Paths
+// tries to find yt-dlp path e.g. /usr/bin/yt-dlp
+// FIX: Install yt_dlp if path not found.
+fn yt_dlp_path() -> PathBuf {
+    match which::which("yt-dlp").map_err(|_| "can't find yt-dlp in PATH") {
+        Ok(path) => path,
+        Err(_) => PathBuf::from("/usr/bin/yt-dlp"),
+    }
+}
 
 // queuelist is saved here
 fn queuelist_path() -> String {
@@ -170,8 +177,6 @@ impl App {
             self.play_video_url(url)?;
         }
         self.retrieve_queue()?;
-
-        let downloader = self.yt_dlp_downloader();
 
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
@@ -529,29 +534,18 @@ impl App {
         // search_is_loading doesn't stop until check search results is completed)
     }
     async fn perform_search(query: String) -> color_eyre::Result<Vec<Video>> {
-        let options = 
-        if !options.status.success() {
-            return Err(color_eyre::eyre::eyre!(
-                "yt-dlp error: {} \nCheck if yt-dlp is latest.",
-                String::from_utf8_lossy(&options.stderr)
-            ));
+        let extractor = Youtube::new(yt_dlp_path());
+        let options = extractor.search(&query, 25).await?;
+        let mut videos: Vec<Video> = Vec::new();
+        let mut v: Video = Video::default();
+        for entry in options.entries {
+            v.id = entry.id;
+            v.title = entry.title;
+            if let Some(a) = entry.uploader {
+                v.uploader = a;
+            };
+            videos.push(v.clone());
         }
-
-        let mut videos = Vec::new();
-        let stdout = String::from_utf8_lossy(&options.stdout);
-
-        for line in stdout.lines() {
-            let video = serde_json::from_str::<Video>(line);
-            match video {
-                Ok(v) => {
-                    videos.push(v);
-                }
-                Err(e) => {
-                    eprintln!("video json parsing nothing working: {}", e);
-                }
-            }
-        }
-
         Ok(videos)
     }
 
@@ -626,7 +620,6 @@ impl App {
         }
 
         self.mpv_connect_attempts = 10;
-        //TEMP SOLUTION FIND BETTER WAY TO CHECK IF IPC LOADED
         Ok(())
     }
 
@@ -707,15 +700,6 @@ impl App {
         {
             eprintln!("Could not remove /tmp/mpv-socket file: {e}");
         }
-    }
-
-    async fn yt_dlp_downloader() -> color_eyre::Result<Downloader, Box<dyn std::error::Error>> {
-        let output_dir = PathBuf::from(MEDIA_OUTPUT_DIRECTORY);
-        let yt_dlp_path = which::which("yt-dlp").map_err(|_| "can't find yt-dlp in PATH")?;
-        let ffmpeg_path = which::which("ffmpeg").map_err(|_| "can't find ffmpeg in PATH")?;
-        let libraries = Libraries::new(yt_dlp_path, ffmpeg_path);
-        let downloader = Downloader::builder(libraries, output_dir).build().await?;
-        Ok(downloader)
     }
 
     fn tabs_select(&mut self, screen: Screen) {
