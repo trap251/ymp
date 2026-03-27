@@ -817,38 +817,3 @@ impl Video {
         app.send_mpv_command(vec!["get_property", "volume"])
     }
 }
-
-//fn check_dependency(&mut self, dependency: &str) {
-//    let dependency_version_latest_command = Command::new("pacman")
-//        .arg("-Si")
-//        .arg(dependency)
-//        .output()
-//        .unwrap()
-//        .stdout;
-
-//    let dependency_version_latest_string =
-//        String::from_utf8_lossy(&dependency_version_latest_command);
-
-//    let dependency_version_latest = dependency_version_latest_string
-//        .lines()
-//        .find(|line| line.contains("Version"))
-//        .unwrap();
-
-//    let dependency_version_current_command = Command::new("pacman")
-//        .arg("-Qi")
-//        .arg(dependency)
-//        .output()
-//        .unwrap()
-//        .stdout;
-
-//    let dependency_version_current_string =
-//        String::from_utf8_lossy(&dependency_version_current_command);
-
-//    let dependency_version_current = dependency_version_current_string
-//        .lines()
-//        .find(|line| line.contains("Version"))
-//        .unwrap();
-//    if dependency_version_current != dependency_version_latest {
-//        eprintln!("{dependency} out of date. Update {dependency}")
-//    }
-//}
