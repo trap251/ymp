@@ -1,0 +1,759 @@
+// TODO: Make code modular; separate parts into their own files
+// FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
+use crate::ui::Popup;
+use crate::ui::TabsState;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::widgets::Tabs;
+use ratatui::{
+    DefaultTerminal, Frame,
+    layout::{Constraint, Layout, Rect},
+    style::{
+        Color, Style, Stylize,
+        palette::material::{self, AccentedPalette, BLUE},
+    },
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph},
+};
+use serde::{Deserialize, Serialize};
+use std::{
+    env, fs,
+    io::{ErrorKind, Write},
+    os::unix::net::UnixStream,
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    time::Duration,
+};
+use tokio::sync::mpsc;
+use yt_dlp::extractor::Youtube;
+
+// Color Scheme
+const COLOR_SCHEME: AccentedPalette = BLUE;
+const SUBTEXT_FG: Color = COLOR_SCHEME.c600;
+const HIGHLIGHT_FG: Color = material::BLACK;
+const HIGHLIGHT_BG: Color = COLOR_SCHEME.a100;
+const BORDER_FG: Color = COLOR_SCHEME.a100;
+
+// Paths
+// tries to find yt-dlp path e.g. /usr/bin/yt-dlp
+// FIX: Install yt_dlp if path not found. HINT: Change ERR()
+fn yt_dlp_path() -> PathBuf {
+    match which::which("yt-dlp").map_err(|_| "can't find yt-dlp in PATH") {
+        Ok(path) => path,
+        Err(_) => PathBuf::from("/usr/bin/yt-dlp"),
+    }
+}
+
+// queuelist is saved here
+fn queuelist_path() -> String {
+    match dirs::data_local_dir() {
+        Some(mut path) => {
+            path.push("ymp");
+            path.push("queuelist.json");
+            path.to_string_lossy().into_owned()
+        }
+        None => {
+            let mut path = PathBuf::from(".");
+            path.push("ymp");
+            path.push("queuelist.json");
+            path.to_string_lossy().into_owned()
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+enum Mode {
+    #[default]
+    Default,
+    Search,
+}
+
+#[derive(Debug, Default, PartialEq)]
+enum PlaybackMode {
+    #[default]
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Default, PartialEq)]
+enum Screen {
+    #[default]
+    //Menu,
+    Queue,
+    Results,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct Video {
+    id: String,
+    title: String,
+    #[serde(default)]
+    uploader: String,
+    // duration: f64,
+}
+
+impl Video {
+    fn play_pause(app: &mut App) -> color_eyre::Result<()> {
+        app.send_mpv_command(vec!["cycle", "pause"])
+    }
+    fn stop(app: &mut App) -> color_eyre::Result<()> {
+        app.is_nowplaying = false;
+        app.kill_mpv();
+        Ok(())
+    }
+    fn increase_volume(app: &mut App) -> color_eyre::Result<()> {
+        app.send_mpv_command(vec!["add", "volume", "5"])
+    }
+    fn decrease_volume(app: &mut App) -> color_eyre::Result<()> {
+        app.send_mpv_command(vec!["add", "volume", "-5"])
+    }
+    fn get_current_volume(app: &mut App) -> color_eyre::Result<()> {
+        app.send_mpv_command(vec!["get_property", "volume"])
+    }
+}
+
+/// The main application which holds the state and logic of the application.
+#[derive(Debug, Default)]
+pub struct App {
+    /// Is the application running?
+    running: bool,
+    //menulist_state: ListState,
+    resultlist: Vec<Video>,
+    resultlist_state: ListState,
+    queuelist: Vec<Video>,
+    queuelist_state: ListState,
+    tabs_state: TabsState,
+
+    mode: Mode,
+    playback_mode: PlaybackMode,
+    screen: Screen,
+    search_query: String,
+    pub tabs_titles: Vec<String>,
+    mpv_process: Option<Child>,
+    mpv_stream: Option<UnixStream>,
+    mpv_connect_attempts: i8,
+    now_playing: Video,
+    is_nowplaying: bool,
+
+    // tokio  search-related stuff
+    search_is_loading: bool, // In-case I want to add a leading screen
+    search_rx: Option<mpsc::UnboundedReceiver<color_eyre::Result<Vec<Video>>>>, //receives search results
+}
+
+impl App {
+    /// Construct a new instance of [`App`].
+    fn default() -> Self {
+        let running = true;
+        let tabs_titles: Vec<String> = vec![
+            String::from("     Queue     "),
+            String::from("     Results     "),
+        ];
+        let resultlist = Vec::new();
+        let resultlist_state = ListState::default().with_selected(Some(0));
+        let queuelist = Vec::new();
+        let queuelist_state = ListState::default().with_selected(Some(0));
+        let tabs_state = TabsState::new(tabs_titles.clone());
+        let mode = Mode::default();
+        let playback_mode = PlaybackMode::Audio;
+        let search_query = String::default();
+        //FIX::Could potentially index into a place that doesn't exist
+        let screen = Screen::Queue;
+        let mpv_process: Option<Child> = None;
+        let mpv_stream: Option<UnixStream> = None;
+        let mpv_connect_attempts = 0;
+        let now_playing: Video = Video::default();
+        let is_nowplaying = false;
+        let search_is_loading = false;
+        let search_rx = None;
+
+        Self {
+            running,
+            tabs_titles,
+            //menulist_state,
+            resultlist,
+            resultlist_state,
+            queuelist,
+            queuelist_state,
+            tabs_state,
+            mode,
+            playback_mode,
+            search_query,
+            screen,
+            mpv_process,
+            mpv_stream,
+            mpv_connect_attempts,
+            now_playing,
+            is_nowplaying,
+            search_is_loading,
+            search_rx,
+        }
+    }
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run the application's main loop.
+    pub async fn run(mut self, mut terminal: DefaultTerminal) -> color_eyre::Result<()> {
+        //self.check_dependency("yt-dlp");
+        self.running = true;
+        if let Some(url) = env::args().nth(1) {
+            self.play_video_url(url)?;
+        }
+        self.retrieve_queue()?;
+
+        while self.running {
+            terminal.draw(|frame| self.render(frame))?;
+            self.check_search_results()?;
+            self.try_connect_mpv();
+            if event::poll(Duration::from_millis(50))? {
+                self.handle_crossterm_events()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Renders the user interface.
+    fn render(&mut self, frame: &mut Frame) {
+        let [header_area, content_area, status_area] = Layout::vertical([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
+        .areas(frame.area());
+
+        self.render_header(frame, header_area);
+
+        self.render_status_bar(frame, status_area);
+
+        match self.screen {
+            Screen::Results => {
+                self.render_content(frame, content_area, self.resultlist_state, &self.resultlist);
+            }
+            Screen::Queue => {
+                self.render_content(frame, content_area, self.queuelist_state, &self.queuelist);
+            }
+        }
+
+        match self.mode {
+            Mode::Default => {}
+            Mode::Search => {
+                self.render_search(frame);
+            }
+        }
+    }
+
+    /// Reads the crossterm gevents and updates the state of [`App`].
+    ///
+    /// If application needs to perform work in between handling events, use the
+    /// [`event::poll`] function to check if there are any events available with a timeout.
+    fn handle_crossterm_events(&mut self) -> color_eyre::Result<()> {
+        match event::read()? {
+            // it's important to check KeyEventKind::Press to avoid handling key release events
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key),
+            Event::Mouse(_) => Ok(()),
+            Event::Resize(_, _) => Ok(()),
+            _ => Ok(()),
+        }?;
+        Ok(())
+    }
+
+    fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
+        match self.mode {
+            Mode::Search => match key.code {
+                KeyCode::Char('c' | 'C') => {
+                    if key.modifiers == KeyModifiers::CONTROL {
+                        self.quit()
+                    } else {
+                        self.search_query.push('c');
+                    }
+                }
+                KeyCode::Char(ch) => self.search_query.push(ch),
+                KeyCode::Backspace => {
+                    self.search_query.pop();
+                }
+                KeyCode::Enter => {
+                    self.search();
+                    self.search_query = String::new();
+                    self.mode = Mode::Default;
+                    self.screen = Screen::Results;
+                }
+                KeyCode::Esc => {
+                    self.search_query = String::new();
+                    self.mode = Mode::Default;
+                }
+                _ => {}
+            },
+            Mode::Default => {
+                if self.screen == Screen::Results {
+                    match key.code {
+                        KeyCode::Char('q' | 'Q') => self.quit(),
+                        KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.quit()
+                        }
+                        KeyCode::Char('H') => {
+                            self.tabs_state.next();
+                            self.screen = Screen::Queue
+                        }
+                        KeyCode::Char('L') => {
+                            self.tabs_state.previous();
+                            self.screen = Screen::Queue
+                        }
+                        KeyCode::Char('j') => self.resultlist_state.select_next(),
+                        KeyCode::Char('k') => self.resultlist_state.select_previous(),
+                        KeyCode::Enter => {
+                            self.play_video(Screen::Results)?;
+                            self.queuelist.push(self.now_playing.clone());
+                            self.save_queue()?;
+                            self.screen = Screen::Queue;
+                            self.tabs_state.select(0);
+                        }
+                        KeyCode::Char('/') => self.mode = Mode::Search,
+                        KeyCode::Char('m') => self.playback_mode_switch(),
+                        _ => {}
+                    }
+                } else if self.screen == Screen::Queue {
+                    match key.code {
+                        KeyCode::Char('q' | 'Q') => self.quit(),
+                        KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
+                            self.quit()
+                        }
+                        KeyCode::Char('C') => {
+                            self.queuelist.clear();
+                            self.save_queue()?;
+                        }
+                        KeyCode::Char('H') => {
+                            self.tabs_state.next();
+                            self.screen = Screen::Results;
+                        }
+                        KeyCode::Char('L') => {
+                            self.tabs_state.previous();
+                            self.screen = Screen::Results;
+                        }
+                        KeyCode::Char('j') => self.queuelist_state.select_next(),
+                        KeyCode::Char('k') => self.queuelist_state.select_previous(),
+                        KeyCode::Enter => self.play_video(Screen::Queue)?,
+                        KeyCode::Char('/') => self.mode = Mode::Search,
+                        KeyCode::Char('m') => self.playback_mode_switch(),
+                        KeyCode::Esc | KeyCode::Char('s') => {
+                            Video::stop(self)?;
+                            self.mode = Mode::Default;
+                        }
+                        KeyCode::Char('9') => {
+                            if self.is_nowplaying {
+                                Video::decrease_volume(self)?;
+                                Video::get_current_volume(self)?;
+                            }
+                        }
+                        KeyCode::Char('0') => {
+                            if self.is_nowplaying {
+                                Video::increase_volume(self)?;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            if self.is_nowplaying {
+                                Video::play_pause(self)?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn render_status_bar(&self, frame: &mut Frame<'_>, status_area: Rect) {
+        // status_bar
+        let [status_area_left, status_area_center, status_area_right] = Layout::horizontal([
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+        ])
+        .areas(status_area);
+
+        let block_border_type = BorderType::Rounded;
+        let block_border_style = Style::new().fg(BORDER_FG);
+        let (left_block, center_block, right_block) = (
+            Block::new()
+                .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
+                .border_type(block_border_type)
+                .border_style(block_border_style),
+            Block::new()
+                .borders(Borders::TOP | Borders::BOTTOM)
+                .border_type(block_border_type)
+                .border_style(block_border_style),
+            Block::new()
+                .borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
+                .border_type(block_border_type)
+                .border_style(block_border_style),
+        );
+        match self.playback_mode {
+            PlaybackMode::Audio => {
+                frame.render_widget(
+                    Paragraph::new(" Mode: [Audio] ")
+                        .left_aligned()
+                        .fg(BORDER_FG)
+                        .block(left_block),
+                    status_area_left,
+                );
+            }
+            PlaybackMode::Video => {
+                frame.render_widget(
+                    Paragraph::new(" Mode: [Video] ")
+                        .left_aligned()
+                        .fg(BORDER_FG)
+                        .block(left_block),
+                    status_area_left,
+                );
+            }
+        }
+        frame.render_widget(
+            Paragraph::new("  ")
+                .left_aligned()
+                .fg(BORDER_FG)
+                .block(center_block.clone()),
+            status_area_center,
+        );
+        frame.render_widget(
+            Paragraph::new("  ")
+                .right_aligned()
+                .fg(BORDER_FG)
+                .block(center_block),
+            status_area_center,
+        );
+        frame.render_widget(
+            Paragraph::new("  ")
+                .right_aligned()
+                .fg(BORDER_FG)
+                .block(right_block),
+            status_area_right,
+        );
+
+        // ---------- status_bar
+    }
+    fn render_content(
+        &self,
+        frame: &mut Frame<'_>,
+        content_area: Rect,
+        mut list_state: ListState,
+        videolist: &[Video],
+    ) {
+        //content
+        let content_block_type = BorderType::Rounded;
+        let content_block_style = Style::new().fg(BORDER_FG);
+        let [content_block] = [Block::bordered()
+            .border_type(content_block_type)
+            .border_style(content_block_style)
+            .padding(Padding::horizontal(1))];
+
+        let items: Vec<ListItem> = videolist
+            .iter()
+            .map(|video| {
+                ListItem::new(Line::from(vec![
+                    Span::from(format!(
+                        "{:<1$}",
+                        video.title,
+                        (content_area.width as usize).saturating_sub(30)
+                    )),
+                    Span::styled(" | ", Style::new().dim()),
+                    Span::styled(&video.uploader, Style::new().fg(SUBTEXT_FG)),
+                ]))
+            })
+            .collect();
+
+        frame.render_widget(content_block.clone(), content_area);
+
+        frame.render_stateful_widget(
+            List::new(items)
+                .block(content_block)
+                .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG))
+                .highlight_symbol("> "),
+            content_area,
+            &mut list_state,
+        );
+        // ---------- content
+    }
+
+    fn render_header(&self, frame: &mut Frame<'_>, header_area: Rect) {
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(header_area);
+        let block_type = BorderType::Rounded;
+        let block_style = Style::new().fg(BORDER_FG);
+        let left_block = Block::new()
+            .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
+            .border_type(block_type)
+            .border_style(block_style);
+        let right_block = Block::new()
+            .borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
+            .border_type(block_type)
+            .border_style(block_style);
+
+        let tabs = Tabs::new(self.tabs_titles.clone())
+            .padding("", "")
+            .divider("")
+            .block(left_block.clone())
+            .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).bold())
+            .select(Some(self.tabs_state.selected()));
+
+        let now_playing = if self.is_nowplaying {
+            Paragraph::new(String::from(&self.now_playing.title)).block(right_block.clone())
+        } else {
+            Paragraph::new(String::from(&self.now_playing.title))
+                .block(right_block)
+                .italic()
+        };
+
+        frame.render_widget(tabs, left);
+        frame.render_widget(now_playing, right);
+
+        // ------------- header
+    }
+
+    fn render_search(&self, frame: &mut Frame<'_>) {
+        // search
+        let [_, search_area, _] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(3),
+            Constraint::Fill(1),
+        ])
+        .areas(frame.area());
+        let [_, search_area, _] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Percentage(50),
+            Constraint::Fill(1),
+        ])
+        .areas(search_area);
+
+        let border_type = BorderType::Rounded;
+        let border_style = Style::new().fg(BORDER_FG).dim();
+        let title_style = Style::new().fg(BORDER_FG).bold().dim();
+        let search = Popup::default()
+            .content(format!(" {}", self.search_query))
+            .title(" Search ")
+            .title_style(title_style)
+            .borders(Borders::ALL)
+            .border_type(border_type)
+            .border_style(border_style)
+            .padding(Padding::horizontal(1));
+        frame.render_widget(search, search_area);
+        //------------search
+    }
+
+    fn search(&mut self) {
+        self.search_is_loading = true;
+
+        self.resultlist.clear();
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.search_rx = Some(rx);
+
+        let query = self.search_query.clone();
+
+        tokio::spawn(async move {
+            let out = Self::perform_search(query).await;
+            let _ = tx.send(out);
+        });
+
+        // self.search_is_loading is set to false in check_search_results for obvious reasons. (Because
+        // search_is_loading doesn't stop until check search results is completed)
+    }
+    async fn perform_search(query: String) -> color_eyre::Result<Vec<Video>> {
+        let extractor = Youtube::new(yt_dlp_path());
+        let options = extractor.search(&query, 25).await?;
+        let mut videos: Vec<Video> = Vec::new();
+        let mut v: Video = Video::default();
+        for entry in options.entries {
+            v.id = entry.id;
+            v.title = entry.title;
+            if let Some(a) = entry.uploader {
+                v.uploader = a;
+            };
+            videos.push(v.clone());
+        }
+        Ok(videos)
+    }
+
+    fn check_search_results(&mut self) -> color_eyre::Result<()> {
+        if let Some(rx) = &mut self.search_rx {
+            match rx.try_recv() {
+                Ok(Ok(videos)) => {
+                    self.resultlist = videos;
+                    if !self.resultlist.is_empty() {
+                        self.resultlist_state.select(Some(0));
+                    }
+                    self.search_is_loading = false;
+                    self.search_rx = None;
+                }
+                Ok(Err(e)) => {
+                    return Err(color_eyre::eyre::eyre!("Videos not recived. Error: {}", e));
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // Might still be loading. Don't do anything here.
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // Died unexpectedly
+                    self.search_is_loading = false;
+                    self.search_rx = None;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn play_video(&mut self, screen: Screen) -> color_eyre::Result<()> {
+        if self.is_nowplaying {
+            self.kill_mpv();
+        }
+        self.is_nowplaying = true;
+
+        let (state, list) = match screen {
+            Screen::Results => (&self.resultlist_state, &self.resultlist),
+            Screen::Queue => (&self.queuelist_state, &self.queuelist),
+        };
+
+        if let Some(index) = state.selected() {
+            self.now_playing = list[index].clone();
+        }
+
+        match self.playback_mode {
+            PlaybackMode::Audio => {
+                let child = Command::new("mpv")
+                    .arg("--ytdl-format=bestaudio")
+                    .arg(format!(
+                        "https://www.youtube.com/watch?v={}",
+                        self.now_playing.id
+                    ))
+                    .arg("--input-ipc-server=/tmp/mpv-socket")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .stdin(Stdio::null())
+                    .spawn()?;
+                self.mpv_process = Some(child);
+            }
+            PlaybackMode::Video => {
+                let child = Command::new("mpv")
+                    .arg(format!(
+                        "https://www.youtube.com/watch?v={}",
+                        self.now_playing.id
+                    ))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?;
+                self.mpv_process = Some(child);
+            }
+        }
+
+        self.mpv_connect_attempts = 10;
+        Ok(())
+    }
+
+    fn play_video_url(&mut self, url: String) -> color_eyre::Result<()> {
+        if self.is_nowplaying {
+            self.kill_mpv();
+        }
+        self.is_nowplaying = true;
+        match self.playback_mode {
+            PlaybackMode::Audio => {
+                let child = Command::new("mpv")
+                    .arg("--ytdl-format=bestaudio")
+                    .arg(url)
+                    .arg("--input-ipc-server=/tmp/mpv-socket")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .stdin(Stdio::null())
+                    .spawn()?;
+                self.mpv_process = Some(child);
+            }
+            PlaybackMode::Video => {
+                let child = Command::new("mpv")
+                    .arg(url)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?;
+                self.mpv_process = Some(child);
+            }
+        }
+        self.mpv_connect_attempts = 10;
+        Ok(())
+    }
+
+    fn try_connect_mpv(&mut self) {
+        if self.mpv_connect_attempts == 0 {
+            return;
+        }
+        match UnixStream::connect("/tmp/mpv-socket") {
+            Ok(o) => {
+                self.mpv_stream = Some(o);
+                self.mpv_connect_attempts = 0;
+            }
+            Err(_) => {
+                self.mpv_connect_attempts -= 1;
+            }
+        }
+    }
+
+    fn send_mpv_command(&mut self, args: Vec<&str>) -> color_eyre::Result<()> {
+        let mut vec_args: Vec<String> = Vec::new();
+        for arg in args {
+            vec_args.push(format!("\"{}\"", arg));
+        }
+        let json_args = vec_args.join(",");
+        let message = format!("{{\"command\": [{json_args}]}}\n");
+        if let Some(ref mut stream) = self.mpv_stream
+            && let Err(e) = stream.write_all(message.as_bytes())
+        {
+            eprintln!("Could not write to UnixStream at send_mpv_command(): {e} ");
+        }
+        Ok(())
+    }
+
+    fn kill_mpv(&mut self) {
+        self.mpv_stream.take();
+
+        if let Some(ref mut child) = self.mpv_process {
+            if let Err(e) = child.kill() {
+                eprintln!("Could not kill mpv child process, call idf: {e}");
+            }
+            if let Err(e) = child.wait() {
+                eprintln!("Could not wait on mpv child process: {e}");
+            }
+        }
+        self.mpv_process = None;
+        if let Err(e) = fs::remove_file("/tmp/mpv-socket")
+            && e.kind() != ErrorKind::NotFound
+        {
+            eprintln!("Could not remove /tmp/mpv-socket file: {e}");
+        }
+    }
+
+    fn playback_mode_switch(&mut self) {
+        if self.playback_mode == PlaybackMode::Audio {
+            self.playback_mode = PlaybackMode::Video;
+        } else {
+            self.playback_mode = PlaybackMode::Audio;
+        }
+    }
+
+    fn save_queue(&self) -> color_eyre::Result<()> {
+        if let Some((path, _filename)) = queuelist_path().rsplit_once("/") {
+            fs::DirBuilder::new().recursive(true).create(path)?;
+        }
+        let queuelist_json = serde_json::to_string_pretty(&self.queuelist)?;
+        fs::write(queuelist_path(), queuelist_json)?;
+        Ok(())
+    }
+
+    fn retrieve_queue(&mut self) -> color_eyre::Result<()> {
+        let queuelist_path_string = queuelist_path();
+        if fs::exists(&queuelist_path_string)? {
+            let queuelist = fs::read_to_string(&queuelist_path_string)?;
+            self.queuelist = serde_json::from_str(queuelist.as_str())?;
+        }
+        Ok(())
+    }
+
+    /// Set running to false to quit the application.
+    fn quit(&mut self) {
+        self.kill_mpv();
+        self.running = false;
+    }
+}
