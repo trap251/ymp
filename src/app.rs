@@ -1,7 +1,8 @@
 // TODO: Make code modular; separate parts into their own files
 // FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
-use crate::media::Search;
+use crate::search;
 use crate::ui::TabsState;
+
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
 use serde::{Deserialize, Serialize};
@@ -317,7 +318,7 @@ impl App {
         let query = self.search_query.clone();
 
         tokio::spawn(async move {
-            let out = Search::perform_search(query).await;
+            let out = search::perform_search(query).await;
             let _ = tx.send(out);
         });
 
