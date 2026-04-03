@@ -1,14 +1,14 @@
 // TODO: Make code modular; separate parts into their own files
 // FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
-use crate::search;
+pub use crate::media::Video;
+use crate::media::search;
 use crate::ui::TabsState;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
-use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
-    io::{ErrorKind, Write},
     os::unix::net::UnixStream,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -57,35 +57,6 @@ pub enum Screen {
     //Menu,
     Queue,
     Results,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Video {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub uploader: String,
-    // duration: f64,
-}
-
-impl Video {
-    fn play_pause(app: &mut App) -> color_eyre::Result<()> {
-        app.send_mpv_command(vec!["cycle", "pause"])
-    }
-    fn stop(app: &mut App) -> color_eyre::Result<()> {
-        app.is_nowplaying = false;
-        app.kill_mpv();
-        Ok(())
-    }
-    fn increase_volume(app: &mut App) -> color_eyre::Result<()> {
-        app.send_mpv_command(vec!["add", "volume", "5"])
-    }
-    fn decrease_volume(app: &mut App) -> color_eyre::Result<()> {
-        app.send_mpv_command(vec!["add", "volume", "-5"])
-    }
-    fn get_current_volume(app: &mut App) -> color_eyre::Result<()> {
-        app.send_mpv_command(vec!["get_property", "volume"])
-    }
 }
 
 /// The main application which holds the state and logic of the application.
@@ -281,23 +252,27 @@ impl App {
                         KeyCode::Char('/') => self.mode = Mode::Search,
                         KeyCode::Char('m') => self.playback_mode_switch(),
                         KeyCode::Esc | KeyCode::Char('s') => {
-                            Video::stop(self)?;
+                            Video::stop(
+                                &mut self.is_nowplaying,
+                                &mut self.mpv_stream,
+                                &mut self.mpv_process,
+                            )?;
                             self.mode = Mode::Default;
                         }
                         KeyCode::Char('9') => {
                             if self.is_nowplaying {
-                                Video::decrease_volume(self)?;
-                                Video::get_current_volume(self)?;
+                                Video::decrease_volume(&mut self.mpv_stream)?;
+                                Video::get_current_volume(&mut self.mpv_stream)?;
                             }
                         }
                         KeyCode::Char('0') => {
                             if self.is_nowplaying {
-                                Video::increase_volume(self)?;
+                                Video::increase_volume(&mut self.mpv_stream)?;
                             }
                         }
                         KeyCode::Char(' ') => {
                             if self.is_nowplaying {
-                                Video::play_pause(self)?;
+                                Video::play_pause(&mut self.mpv_stream)?;
                             }
                         }
                         _ => {}
@@ -355,7 +330,7 @@ impl App {
 
     fn play_video(&mut self, screen: Screen) -> color_eyre::Result<()> {
         if self.is_nowplaying {
-            self.kill_mpv();
+            Video::kill_mpv(&mut self.mpv_stream, &mut self.mpv_process);
         }
         self.is_nowplaying = true;
 
@@ -402,7 +377,7 @@ impl App {
 
     fn play_video_url(&mut self, url: String) -> color_eyre::Result<()> {
         if self.is_nowplaying {
-            self.kill_mpv();
+            Video::kill_mpv(&mut self.mpv_stream, &mut self.mpv_process);
         }
         self.is_nowplaying = true;
         match self.playback_mode {
@@ -445,40 +420,6 @@ impl App {
         }
     }
 
-    fn send_mpv_command(&mut self, args: Vec<&str>) -> color_eyre::Result<()> {
-        let mut vec_args: Vec<String> = Vec::new();
-        for arg in args {
-            vec_args.push(format!("\"{}\"", arg));
-        }
-        let json_args = vec_args.join(",");
-        let message = format!("{{\"command\": [{json_args}]}}\n");
-        if let Some(ref mut stream) = self.mpv_stream
-            && let Err(e) = stream.write_all(message.as_bytes())
-        {
-            eprintln!("Could not write to UnixStream at send_mpv_command(): {e} ");
-        }
-        Ok(())
-    }
-
-    fn kill_mpv(&mut self) {
-        self.mpv_stream.take();
-
-        if let Some(ref mut child) = self.mpv_process {
-            if let Err(e) = child.kill() {
-                eprintln!("Could not kill mpv child process, call idf: {e}");
-            }
-            if let Err(e) = child.wait() {
-                eprintln!("Could not wait on mpv child process: {e}");
-            }
-        }
-        self.mpv_process = None;
-        if let Err(e) = fs::remove_file("/tmp/mpv-socket")
-            && e.kind() != ErrorKind::NotFound
-        {
-            eprintln!("Could not remove /tmp/mpv-socket file: {e}");
-        }
-    }
-
     fn playback_mode_switch(&mut self) {
         if self.playback_mode == PlaybackMode::Audio {
             self.playback_mode = PlaybackMode::Video;
@@ -507,7 +448,7 @@ impl App {
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
-        self.kill_mpv();
+        Video::kill_mpv(&mut self.mpv_stream, &mut self.mpv_process);
         self.running = false;
     }
 }
