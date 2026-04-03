@@ -47,7 +47,7 @@ impl App {
         match self.mode {
             Mode::Default => {}
             Mode::Search => {
-                render_search(&self, frame);
+                render_search(self, frame);
             }
         }
     }

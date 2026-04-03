@@ -1,6 +1,6 @@
 // TODO: Make code modular; separate parts into their own files
 // FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
-use crate::media::search::Search;
+use crate::media::Search;
 use crate::ui::TabsState;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
