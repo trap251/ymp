@@ -1,19 +1,9 @@
 // TODO: Make code modular; separate parts into their own files
 // FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
-use crate::ui::Popup;
+use crate::media::search::Search;
 use crate::ui::TabsState;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::widgets::Tabs;
-use ratatui::{
-    DefaultTerminal, Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{
-        Color, Style, Stylize,
-        palette::material::{self, AccentedPalette, BLUE},
-    },
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph},
-};
+use ratatui::{DefaultTerminal, widgets::ListState};
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs,
@@ -24,24 +14,10 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc;
-use yt_dlp::extractor::Youtube;
-
-// Color Scheme
-const COLOR_SCHEME: AccentedPalette = BLUE;
-const SUBTEXT_FG: Color = COLOR_SCHEME.c600;
-const HIGHLIGHT_FG: Color = material::BLACK;
-const HIGHLIGHT_BG: Color = COLOR_SCHEME.a100;
-const BORDER_FG: Color = COLOR_SCHEME.a100;
 
 // Paths
 // tries to find yt-dlp path e.g. /usr/bin/yt-dlp
 // FIX: Install yt_dlp if path not found. HINT: Change ERR()
-fn yt_dlp_path() -> PathBuf {
-    match which::which("yt-dlp").map_err(|_| "can't find yt-dlp in PATH") {
-        Ok(path) => path,
-        Err(_) => PathBuf::from("/usr/bin/yt-dlp"),
-    }
-}
 
 // queuelist is saved here
 fn queuelist_path() -> String {
@@ -61,21 +37,21 @@ fn queuelist_path() -> String {
 }
 
 #[derive(Debug, Default, PartialEq)]
-enum Mode {
+pub enum Mode {
     #[default]
     Default,
     Search,
 }
 
 #[derive(Debug, Default, PartialEq)]
-enum PlaybackMode {
+pub enum PlaybackMode {
     #[default]
     Audio,
     Video,
 }
 
 #[derive(Debug, Default, PartialEq)]
-enum Screen {
+pub enum Screen {
     #[default]
     //Menu,
     Queue,
@@ -83,11 +59,11 @@ enum Screen {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-struct Video {
-    id: String,
-    title: String,
+pub struct Video {
+    pub id: String,
+    pub title: String,
     #[serde(default)]
-    uploader: String,
+    pub uploader: String,
     // duration: f64,
 }
 
@@ -117,22 +93,22 @@ pub struct App {
     /// Is the application running?
     running: bool,
     //menulist_state: ListState,
-    resultlist: Vec<Video>,
-    resultlist_state: ListState,
-    queuelist: Vec<Video>,
-    queuelist_state: ListState,
-    tabs_state: TabsState,
+    pub resultlist: Vec<Video>,
+    pub resultlist_state: ListState,
+    pub queuelist: Vec<Video>,
+    pub queuelist_state: ListState,
+    pub tabs_state: TabsState,
 
-    mode: Mode,
-    playback_mode: PlaybackMode,
-    screen: Screen,
-    search_query: String,
+    pub mode: Mode,
+    pub playback_mode: PlaybackMode,
+    pub screen: Screen,
+    pub search_query: String,
     pub tabs_titles: Vec<String>,
     mpv_process: Option<Child>,
     mpv_stream: Option<UnixStream>,
     mpv_connect_attempts: i8,
-    now_playing: Video,
-    is_nowplaying: bool,
+    pub now_playing: Video,
+    pub is_nowplaying: bool,
 
     // tokio  search-related stuff
     search_is_loading: bool, // In-case I want to add a leading screen
@@ -209,36 +185,6 @@ impl App {
             }
         }
         Ok(())
-    }
-
-    /// Renders the user interface.
-    fn render(&mut self, frame: &mut Frame) {
-        let [header_area, content_area, status_area] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .areas(frame.area());
-
-        self.render_header(frame, header_area);
-
-        self.render_status_bar(frame, status_area);
-
-        match self.screen {
-            Screen::Results => {
-                self.render_content(frame, content_area, self.resultlist_state, &self.resultlist);
-            }
-            Screen::Queue => {
-                self.render_content(frame, content_area, self.queuelist_state, &self.queuelist);
-            }
-        }
-
-        match self.mode {
-            Mode::Default => {}
-            Mode::Search => {
-                self.render_search(frame);
-            }
-        }
     }
 
     /// Reads the crossterm gevents and updates the state of [`App`].
@@ -361,184 +307,6 @@ impl App {
         Ok(())
     }
 
-    fn render_status_bar(&self, frame: &mut Frame<'_>, status_area: Rect) {
-        // status_bar
-        let [status_area_left, status_area_center, status_area_right] = Layout::horizontal([
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-        ])
-        .areas(status_area);
-
-        let block_border_type = BorderType::Rounded;
-        let block_border_style = Style::new().fg(BORDER_FG);
-        let (left_block, center_block, right_block) = (
-            Block::new()
-                .borders(Borders::LEFT | Borders::TOP | Borders::BOTTOM)
-                .border_type(block_border_type)
-                .border_style(block_border_style),
-            Block::new()
-                .borders(Borders::TOP | Borders::BOTTOM)
-                .border_type(block_border_type)
-                .border_style(block_border_style),
-            Block::new()
-                .borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
-                .border_type(block_border_type)
-                .border_style(block_border_style),
-        );
-        match self.playback_mode {
-            PlaybackMode::Audio => {
-                frame.render_widget(
-                    Paragraph::new(" Mode: [Audio] ")
-                        .left_aligned()
-                        .fg(BORDER_FG)
-                        .block(left_block),
-                    status_area_left,
-                );
-            }
-            PlaybackMode::Video => {
-                frame.render_widget(
-                    Paragraph::new(" Mode: [Video] ")
-                        .left_aligned()
-                        .fg(BORDER_FG)
-                        .block(left_block),
-                    status_area_left,
-                );
-            }
-        }
-        frame.render_widget(
-            Paragraph::new("  ")
-                .left_aligned()
-                .fg(BORDER_FG)
-                .block(center_block.clone()),
-            status_area_center,
-        );
-        frame.render_widget(
-            Paragraph::new("  ")
-                .right_aligned()
-                .fg(BORDER_FG)
-                .block(center_block),
-            status_area_center,
-        );
-        frame.render_widget(
-            Paragraph::new("  ")
-                .right_aligned()
-                .fg(BORDER_FG)
-                .block(right_block),
-            status_area_right,
-        );
-
-        // ---------- status_bar
-    }
-    fn render_content(
-        &self,
-        frame: &mut Frame<'_>,
-        content_area: Rect,
-        mut list_state: ListState,
-        videolist: &[Video],
-    ) {
-        //content
-        let content_block_type = BorderType::Rounded;
-        let content_block_style = Style::new().fg(BORDER_FG);
-        let [content_block] = [Block::bordered()
-            .border_type(content_block_type)
-            .border_style(content_block_style)
-            .padding(Padding::horizontal(1))];
-
-        let items: Vec<ListItem> = videolist
-            .iter()
-            .map(|video| {
-                ListItem::new(Line::from(vec![
-                    Span::from(format!(
-                        "{:<1$}",
-                        video.title,
-                        (content_area.width as usize).saturating_sub(30)
-                    )),
-                    Span::styled(" | ", Style::new().dim()),
-                    Span::styled(&video.uploader, Style::new().fg(SUBTEXT_FG)),
-                ]))
-            })
-            .collect();
-
-        frame.render_widget(content_block.clone(), content_area);
-
-        frame.render_stateful_widget(
-            List::new(items)
-                .block(content_block)
-                .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG))
-                .highlight_symbol("> "),
-            content_area,
-            &mut list_state,
-        );
-        // ---------- content
-    }
-
-    fn render_header(&self, frame: &mut Frame<'_>, header_area: Rect) {
-        let [left, right] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(header_area);
-        let block_type = BorderType::Rounded;
-        let block_style = Style::new().fg(BORDER_FG);
-        let left_block = Block::new()
-            .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
-            .border_type(block_type)
-            .border_style(block_style);
-        let right_block = Block::new()
-            .borders(Borders::RIGHT | Borders::TOP | Borders::BOTTOM)
-            .border_type(block_type)
-            .border_style(block_style);
-
-        let tabs = Tabs::new(self.tabs_titles.clone())
-            .padding("", "")
-            .divider("")
-            .block(left_block.clone())
-            .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).bold())
-            .select(Some(self.tabs_state.selected()));
-
-        let now_playing = if self.is_nowplaying {
-            Paragraph::new(String::from(&self.now_playing.title)).block(right_block.clone())
-        } else {
-            Paragraph::new(String::from(&self.now_playing.title))
-                .block(right_block)
-                .italic()
-        };
-
-        frame.render_widget(tabs, left);
-        frame.render_widget(now_playing, right);
-
-        // ------------- header
-    }
-
-    fn render_search(&self, frame: &mut Frame<'_>) {
-        // search
-        let [_, search_area, _] = Layout::vertical([
-            Constraint::Fill(1),
-            Constraint::Length(3),
-            Constraint::Fill(1),
-        ])
-        .areas(frame.area());
-        let [_, search_area, _] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Percentage(50),
-            Constraint::Fill(1),
-        ])
-        .areas(search_area);
-
-        let border_type = BorderType::Rounded;
-        let border_style = Style::new().fg(BORDER_FG).dim();
-        let title_style = Style::new().fg(BORDER_FG).bold().dim();
-        let search = Popup::default()
-            .content(format!(" {}", self.search_query))
-            .title(" Search ")
-            .title_style(title_style)
-            .borders(Borders::ALL)
-            .border_type(border_type)
-            .border_style(border_style)
-            .padding(Padding::horizontal(1));
-        frame.render_widget(search, search_area);
-        //------------search
-    }
-
     fn search(&mut self) {
         self.search_is_loading = true;
 
@@ -549,27 +317,12 @@ impl App {
         let query = self.search_query.clone();
 
         tokio::spawn(async move {
-            let out = Self::perform_search(query).await;
+            let out = Search::perform_search(query).await;
             let _ = tx.send(out);
         });
 
         // self.search_is_loading is set to false in check_search_results for obvious reasons. (Because
         // search_is_loading doesn't stop until check search results is completed)
-    }
-    async fn perform_search(query: String) -> color_eyre::Result<Vec<Video>> {
-        let extractor = Youtube::new(yt_dlp_path());
-        let options = extractor.search(&query, 25).await?;
-        let mut videos: Vec<Video> = Vec::new();
-        let mut v: Video = Video::default();
-        for entry in options.entries {
-            v.id = entry.id;
-            v.title = entry.title;
-            if let Some(a) = entry.uploader {
-                v.uploader = a;
-            };
-            videos.push(v.clone());
-        }
-        Ok(videos)
     }
 
     fn check_search_results(&mut self) -> color_eyre::Result<()> {

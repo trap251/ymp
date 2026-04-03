@@ -1,4 +1,5 @@
 mod app;
+mod media;
 mod ui;
 use crate::app::App;
 #[tokio::main]
