@@ -44,7 +44,7 @@ pub enum Mode {
     Search,
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum PlaybackMode {
     #[default]
     Audio,

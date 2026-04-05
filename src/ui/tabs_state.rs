@@ -1,4 +1,4 @@
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TabsState {
     titles: Vec<String>,
     selected: usize,

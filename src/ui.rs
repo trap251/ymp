@@ -31,9 +31,16 @@ impl App {
         ])
         .areas(frame.area());
 
-        render_header(self, frame, header_area);
+        render_header(
+            self.now_playing.clone(),
+            self.is_nowplaying,
+            self.tabs_state.clone(),
+            self.tabs_titles.clone(),
+            frame,
+            header_area,
+        );
 
-        render_status_bar(self, frame, status_area);
+        render_status_bar(self.playback_mode.clone(), frame, status_area);
 
         match self.screen {
             Screen::Results => {
@@ -47,12 +54,12 @@ impl App {
         match self.mode {
             Mode::Default => {}
             Mode::Search => {
-                render_search(self, frame);
+                render_search(self.search_query.clone(), frame);
             }
         }
     }
 }
-fn render_status_bar(app: &App, frame: &mut Frame<'_>, status_area: Rect) {
+fn render_status_bar(playback_mode: PlaybackMode, frame: &mut Frame<'_>, status_area: Rect) {
     // status_bar
     let [status_area_left, status_area_center, status_area_right] = Layout::horizontal([
         Constraint::Percentage(33),
@@ -77,7 +84,7 @@ fn render_status_bar(app: &App, frame: &mut Frame<'_>, status_area: Rect) {
             .border_type(block_border_type)
             .border_style(block_border_style),
     );
-    match app.playback_mode {
+    match playback_mode {
         PlaybackMode::Audio => {
             frame.render_widget(
                 Paragraph::new(" Mode: [Audio] ")
@@ -163,7 +170,14 @@ fn render_content(
     // ---------- content
 }
 
-fn render_header(app: &App, frame: &mut Frame<'_>, header_area: Rect) {
+fn render_header(
+    now_playing: Video,
+    is_nowplaying: bool,
+    tabs_state: TabsState,
+    tabs_titles: Vec<String>,
+    frame: &mut Frame<'_>,
+    header_area: Rect,
+) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(header_area);
@@ -178,17 +192,17 @@ fn render_header(app: &App, frame: &mut Frame<'_>, header_area: Rect) {
         .border_type(block_type)
         .border_style(block_style);
 
-    let tabs = Tabs::new(app.tabs_titles.clone())
+    let tabs = Tabs::new(tabs_titles)
         .padding("", "")
         .divider("")
         .block(left_block.clone())
         .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).bold())
-        .select(Some(app.tabs_state.selected()));
+        .select(Some(tabs_state.selected()));
 
-    let now_playing = if app.is_nowplaying {
-        Paragraph::new(String::from(&app.now_playing.title)).block(right_block.clone())
+    let now_playing = if is_nowplaying {
+        Paragraph::new(String::from(&now_playing.title)).block(right_block.clone())
     } else {
-        Paragraph::new(String::from(&app.now_playing.title))
+        Paragraph::new(String::from(&now_playing.title))
             .block(right_block)
             .italic()
     };
@@ -199,7 +213,7 @@ fn render_header(app: &App, frame: &mut Frame<'_>, header_area: Rect) {
     // ------------- header
 }
 
-fn render_search(app: &App, frame: &mut Frame<'_>) {
+fn render_search(search_query: String, frame: &mut Frame<'_>) {
     // search
     let [_, search_area, _] = Layout::vertical([
         Constraint::Fill(1),
@@ -218,7 +232,7 @@ fn render_search(app: &App, frame: &mut Frame<'_>) {
     let border_style = Style::new().fg(BORDER_FG).dim();
     let title_style = Style::new().fg(BORDER_FG).bold().dim();
     let search = Popup::default()
-        .content(format!(" {}", app.search_query))
+        .content(format!(" {}", search_query))
         .title(" Search ")
         .title_style(title_style)
         .borders(Borders::ALL)
