@@ -1,4 +1,4 @@
-use crate::app::Video;
+use crate::types::Video;
 use std::path::PathBuf;
 use yt_dlp::extractor::Youtube;
 

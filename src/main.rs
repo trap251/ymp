@@ -1,5 +1,7 @@
 mod app;
-mod media;
+mod player;
+mod search;
+mod types;
 mod ui;
 use crate::app::App;
 #[tokio::main]

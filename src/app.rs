@@ -1,19 +1,14 @@
 // TODO: Make code modular; separate parts into their own files
 // FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
-pub use crate::media::Video;
-use crate::media::search;
+use crate::player::Player;
+use crate::search;
+use crate::types::{Mode, Screen, Video};
 use crate::ui::TabsState;
 
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
-use std::{
-    env, fs,
-    os::unix::net::UnixStream,
-    path::PathBuf,
-    process::{Child, Command, Stdio},
-    time::Duration,
-};
+use std::{env, fs, path::PathBuf, time::Duration};
 use tokio::sync::mpsc;
 
 // Paths
@@ -37,33 +32,12 @@ fn queuelist_path() -> String {
     }
 }
 
-#[derive(Debug, Default, PartialEq)]
-pub enum Mode {
-    #[default]
-    Default,
-    Search,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub enum PlaybackMode {
-    #[default]
-    Audio,
-    Video,
-}
-
-#[derive(Debug, Default, PartialEq)]
-pub enum Screen {
-    #[default]
-    //Menu,
-    Queue,
-    Results,
-}
-
 /// The main application which holds the state and logic of the application.
 #[derive(Debug, Default)]
 pub struct App {
     /// Is the application running?
     running: bool,
+    pub player: Player,
     //menulist_state: ListState,
     pub resultlist: Vec<Video>,
     pub resultlist_state: ListState,
@@ -72,15 +46,9 @@ pub struct App {
     pub tabs_state: TabsState,
 
     pub mode: Mode,
-    pub playback_mode: PlaybackMode,
     pub screen: Screen,
     pub search_query: String,
     pub tabs_titles: Vec<String>,
-    mpv_process: Option<Child>,
-    mpv_stream: Option<UnixStream>,
-    mpv_connect_attempts: i8,
-    pub now_playing: Video,
-    pub is_nowplaying: bool,
 
     // tokio  search-related stuff
     search_is_loading: bool, // In-case I want to add a leading screen
@@ -91,6 +59,7 @@ impl App {
     /// Construct a new instance of [`App`].
     fn default() -> Self {
         let running = true;
+        let player = Player::new();
         let tabs_titles: Vec<String> = vec![
             String::from("     Queue     "),
             String::from("     Results     "),
@@ -101,20 +70,14 @@ impl App {
         let queuelist_state = ListState::default().with_selected(Some(0));
         let tabs_state = TabsState::new(tabs_titles.clone());
         let mode = Mode::default();
-        let playback_mode = PlaybackMode::Audio;
         let search_query = String::default();
-        //FIX::Could potentially index into a place that doesn't exist
         let screen = Screen::Queue;
-        let mpv_process: Option<Child> = None;
-        let mpv_stream: Option<UnixStream> = None;
-        let mpv_connect_attempts = 0;
-        let now_playing: Video = Video::default();
-        let is_nowplaying = false;
         let search_is_loading = false;
         let search_rx = None;
 
         Self {
             running,
+            player,
             tabs_titles,
             //menulist_state,
             resultlist,
@@ -123,14 +86,8 @@ impl App {
             queuelist_state,
             tabs_state,
             mode,
-            playback_mode,
             search_query,
             screen,
-            mpv_process,
-            mpv_stream,
-            mpv_connect_attempts,
-            now_playing,
-            is_nowplaying,
             search_is_loading,
             search_rx,
         }
@@ -144,14 +101,14 @@ impl App {
         //self.check_dependency("yt-dlp");
         self.running = true;
         if let Some(url) = env::args().nth(1) {
-            self.play_video_url(url)?;
+            self.player.play_video_url(url)?;
         }
         self.retrieve_queue()?;
 
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
             self.check_search_results()?;
-            self.try_connect_mpv();
+            self.player.try_connect_mpv();
             if event::poll(Duration::from_millis(50))? {
                 self.handle_crossterm_events()?;
             }
@@ -218,14 +175,15 @@ impl App {
                         KeyCode::Char('j') => self.resultlist_state.select_next(),
                         KeyCode::Char('k') => self.resultlist_state.select_previous(),
                         KeyCode::Enter => {
-                            self.play_video(Screen::Results)?;
-                            self.queuelist.push(self.now_playing.clone());
+                            self.player
+                                .play_video(&self.resultlist, &self.resultlist_state)?;
+                            self.queuelist.push(self.player.now_playing().clone());
                             self.save_queue()?;
                             self.screen = Screen::Queue;
                             self.tabs_state.select(0);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
-                        KeyCode::Char('m') => self.playback_mode_switch(),
+                        KeyCode::Char('m') => self.player.playback_mode_switch(),
                         _ => {}
                     }
                 } else if self.screen == Screen::Queue {
@@ -248,31 +206,29 @@ impl App {
                         }
                         KeyCode::Char('j') => self.queuelist_state.select_next(),
                         KeyCode::Char('k') => self.queuelist_state.select_previous(),
-                        KeyCode::Enter => self.play_video(Screen::Queue)?,
+                        KeyCode::Enter => self
+                            .player
+                            .play_video(&self.queuelist, &self.queuelist_state)?,
                         KeyCode::Char('/') => self.mode = Mode::Search,
-                        KeyCode::Char('m') => self.playback_mode_switch(),
+                        KeyCode::Char('m') => self.player.playback_mode_switch(),
                         KeyCode::Esc | KeyCode::Char('s') => {
-                            Video::stop(
-                                &mut self.is_nowplaying,
-                                &mut self.mpv_stream,
-                                &mut self.mpv_process,
-                            )?;
+                            self.player.stop()?;
                             self.mode = Mode::Default;
                         }
                         KeyCode::Char('9') => {
-                            if self.is_nowplaying {
-                                Video::decrease_volume(&mut self.mpv_stream)?;
-                                Video::get_current_volume(&mut self.mpv_stream)?;
+                            if *self.player.is_nowplaying() {
+                                self.player.decrease_volume()?;
+                                self.player.get_current_volume()?;
                             }
                         }
                         KeyCode::Char('0') => {
-                            if self.is_nowplaying {
-                                Video::increase_volume(&mut self.mpv_stream)?;
+                            if *self.player.is_nowplaying() {
+                                self.player.increase_volume()?;
                             }
                         }
                         KeyCode::Char(' ') => {
-                            if self.is_nowplaying {
-                                Video::play_pause(&mut self.mpv_stream)?;
+                            if *self.player.is_nowplaying() {
+                                self.player.play_pause()?;
                             }
                         }
                         _ => {}
@@ -305,6 +261,8 @@ impl App {
         if let Some(rx) = &mut self.search_rx {
             match rx.try_recv() {
                 Ok(Ok(videos)) => {
+                    self.screen = Screen::Results;
+                    self.tabs_state.select(1);
                     self.resultlist = videos;
                     if !self.resultlist.is_empty() {
                         self.resultlist_state.select(Some(0));
@@ -328,106 +286,6 @@ impl App {
         Ok(())
     }
 
-    fn play_video(&mut self, screen: Screen) -> color_eyre::Result<()> {
-        if self.is_nowplaying {
-            Video::kill_mpv(&mut self.mpv_stream, &mut self.mpv_process);
-        }
-        self.is_nowplaying = true;
-
-        let (state, list) = match screen {
-            Screen::Results => (&self.resultlist_state, &self.resultlist),
-            Screen::Queue => (&self.queuelist_state, &self.queuelist),
-        };
-
-        if let Some(index) = state.selected() {
-            self.now_playing = list[index].clone();
-        }
-
-        match self.playback_mode {
-            PlaybackMode::Audio => {
-                let child = Command::new("mpv")
-                    .arg("--ytdl-format=bestaudio")
-                    .arg(format!(
-                        "https://www.youtube.com/watch?v={}",
-                        self.now_playing.id
-                    ))
-                    .arg("--input-ipc-server=/tmp/mpv-socket")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .stdin(Stdio::null())
-                    .spawn()?;
-                self.mpv_process = Some(child);
-            }
-            PlaybackMode::Video => {
-                let child = Command::new("mpv")
-                    .arg(format!(
-                        "https://www.youtube.com/watch?v={}",
-                        self.now_playing.id
-                    ))
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()?;
-                self.mpv_process = Some(child);
-            }
-        }
-
-        self.mpv_connect_attempts = 10;
-        Ok(())
-    }
-
-    fn play_video_url(&mut self, url: String) -> color_eyre::Result<()> {
-        if self.is_nowplaying {
-            Video::kill_mpv(&mut self.mpv_stream, &mut self.mpv_process);
-        }
-        self.is_nowplaying = true;
-        match self.playback_mode {
-            PlaybackMode::Audio => {
-                let child = Command::new("mpv")
-                    .arg("--ytdl-format=bestaudio")
-                    .arg(url)
-                    .arg("--input-ipc-server=/tmp/mpv-socket")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .stdin(Stdio::null())
-                    .spawn()?;
-                self.mpv_process = Some(child);
-            }
-            PlaybackMode::Video => {
-                let child = Command::new("mpv")
-                    .arg(url)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()?;
-                self.mpv_process = Some(child);
-            }
-        }
-        self.mpv_connect_attempts = 10;
-        Ok(())
-    }
-
-    fn try_connect_mpv(&mut self) {
-        if self.mpv_connect_attempts == 0 {
-            return;
-        }
-        match UnixStream::connect("/tmp/mpv-socket") {
-            Ok(o) => {
-                self.mpv_stream = Some(o);
-                self.mpv_connect_attempts = 0;
-            }
-            Err(_) => {
-                self.mpv_connect_attempts -= 1;
-            }
-        }
-    }
-
-    fn playback_mode_switch(&mut self) {
-        if self.playback_mode == PlaybackMode::Audio {
-            self.playback_mode = PlaybackMode::Video;
-        } else {
-            self.playback_mode = PlaybackMode::Audio;
-        }
-    }
-
     fn save_queue(&self) -> color_eyre::Result<()> {
         if let Some((path, _filename)) = queuelist_path().rsplit_once("/") {
             fs::DirBuilder::new().recursive(true).create(path)?;
@@ -448,7 +306,7 @@ impl App {
 
     /// Set running to false to quit the application.
     fn quit(&mut self) {
-        Video::kill_mpv(&mut self.mpv_stream, &mut self.mpv_process);
+        self.player.kill_mpv();
         self.running = false;
     }
 }

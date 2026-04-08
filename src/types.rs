@@ -6,6 +6,39 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Widget, Wrap},
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Default, PartialEq)]
+pub enum Mode {
+    #[default]
+    Default,
+    Search,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum PlaybackMode {
+    #[default]
+    Audio,
+    Video,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub enum Screen {
+    #[default]
+    //Menu,
+    Queue,
+    Results,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Video {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub uploader: String,
+    // duration: f64,
+}
+
 #[derive(Debug, Default, Setters)]
 pub struct Popup<'a> {
     #[setters(into)]

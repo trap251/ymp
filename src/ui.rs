@@ -1,10 +1,8 @@
-pub mod popup;
 pub mod tabs_state;
-
-pub use popup::Popup;
 pub use tabs_state::TabsState;
 
-use crate::app::{App, Mode, PlaybackMode, Screen, Video};
+use crate::App;
+use crate::types::{Mode, PlaybackMode, Popup, Screen, Video};
 
 use ratatui::{
     Frame,
@@ -32,15 +30,15 @@ impl App {
         .areas(frame.area());
 
         render_header(
-            self.now_playing.clone(),
-            self.is_nowplaying,
+            self.player.now_playing().clone(),
+            *self.player.is_nowplaying(),
             self.tabs_state.clone(),
             self.tabs_titles.clone(),
             frame,
             header_area,
         );
 
-        render_status_bar(self.playback_mode.clone(), frame, status_area);
+        render_status_bar(self.player.playback_mode().clone(), frame, status_area);
 
         match self.screen {
             Screen::Results => {
