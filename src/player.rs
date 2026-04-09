@@ -87,6 +87,19 @@ impl Player {
             self.kill_mpv();
         }
 
+        self.is_nowplaying = true;
+
+        if let Some(index) = state.selected() {
+            if list.len() <= index {
+                return Err(color_eyre::eyre::eyre!(
+                    "Index out of bounds in {} at {} ",
+                    file!(),
+                    line!()
+                ));
+            };
+            self.now_playing = list[index].clone();
+        }
+
         match self.playback_mode {
             PlaybackMode::Audio => {
                 let child = Command::new("mpv")
@@ -117,19 +130,6 @@ impl Player {
 
         // amount of times it tries to connect to mpv socket.
         self.mpv_connect_attempts = 10;
-
-        self.is_nowplaying = true;
-
-        if let Some(index) = state.selected() {
-            if list.len() <= index {
-                return Err(color_eyre::eyre::eyre!(
-                    "Index out of bounds in {} at {} ",
-                    file!(),
-                    line!()
-                ));
-            };
-            self.now_playing = list[index].clone();
-        }
 
         Ok(())
     }
