@@ -3,7 +3,6 @@
 use crate::player::Player;
 use crate::search;
 use crate::types::{Mode, Screen, Video};
-use crate::ui::TabsState;
 
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -43,7 +42,6 @@ pub struct App {
     pub resultlist_state: ListState,
     pub queuelist: Vec<Video>,
     pub queuelist_state: ListState,
-    pub tabs_state: TabsState,
 
     pub mode: Mode,
     pub screen: Screen,
@@ -68,7 +66,6 @@ impl App {
         let resultlist_state = ListState::default().with_selected(Some(0));
         let queuelist = Vec::new();
         let queuelist_state = ListState::default().with_selected(Some(0));
-        let tabs_state = TabsState::new(tabs_titles.clone());
         let mode = Mode::default();
         let search_query = String::default();
         let screen = Screen::Queue;
@@ -84,7 +81,6 @@ impl App {
             resultlist_state,
             queuelist,
             queuelist_state,
-            tabs_state,
             mode,
             search_query,
             screen,
@@ -165,12 +161,10 @@ impl App {
                             self.quit()
                         }
                         KeyCode::Char('H') => {
-                            self.tabs_state.next();
-                            self.screen = Screen::Queue
+                            self.screen.next();
                         }
                         KeyCode::Char('L') => {
-                            self.tabs_state.previous();
-                            self.screen = Screen::Queue
+                            self.screen.previous();
                         }
                         KeyCode::Char('j') => self.resultlist_state.select_next(),
                         KeyCode::Char('k') => self.resultlist_state.select_previous(),
@@ -179,8 +173,7 @@ impl App {
                                 .play_video(&self.resultlist, &self.resultlist_state)?;
                             self.queuelist.push(self.player.now_playing().clone());
                             self.save_queue()?;
-                            self.screen = Screen::Queue;
-                            self.tabs_state.select(0);
+                            self.screen.select(0);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
                         KeyCode::Char('m') => self.player.playback_mode_switch(),
@@ -197,12 +190,10 @@ impl App {
                             self.save_queue()?;
                         }
                         KeyCode::Char('H') => {
-                            self.tabs_state.next();
-                            self.screen = Screen::Results;
+                            self.screen.next();
                         }
                         KeyCode::Char('L') => {
-                            self.tabs_state.previous();
-                            self.screen = Screen::Results;
+                            self.screen.previous();
                         }
                         KeyCode::Char('j') => self.queuelist_state.select_next(),
                         KeyCode::Char('k') => self.queuelist_state.select_previous(),
@@ -261,8 +252,7 @@ impl App {
         if let Some(rx) = &mut self.search_rx {
             match rx.try_recv() {
                 Ok(Ok(videos)) => {
-                    self.screen = Screen::Results;
-                    self.tabs_state.select(1);
+                    self.screen.select(1);
                     self.resultlist = videos;
                     if !self.resultlist.is_empty() {
                         self.resultlist_state.select(Some(0));

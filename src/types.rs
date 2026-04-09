@@ -22,12 +22,43 @@ pub enum PlaybackMode {
     Video,
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Screen {
     #[default]
     //Menu,
     Queue,
     Results,
+}
+
+impl Screen {
+    pub fn next(&mut self) {
+        *self = match self {
+            Screen::Queue => Screen::Results,
+            Screen::Results => Screen::Queue,
+        }
+    }
+
+    pub fn previous(&mut self) {
+        *self = match self {
+            Screen::Queue => Screen::Results,
+            Screen::Results => Screen::Queue,
+        }
+    }
+
+    pub fn select(&mut self, index: usize) {
+        match index {
+            0 => *self = Screen::Queue,
+            1 => *self = Screen::Results,
+            _ => {}
+        }
+    }
+
+    pub fn current(&self) -> usize {
+        match self {
+            Screen::Queue => 0,
+            Screen::Results => 1,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

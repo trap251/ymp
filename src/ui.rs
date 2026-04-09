@@ -1,6 +1,3 @@
-pub mod tabs_state;
-pub use tabs_state::TabsState;
-
 use crate::App;
 use crate::types::{Mode, PlaybackMode, Popup, Screen, Video};
 
@@ -32,7 +29,7 @@ impl App {
         render_header(
             self.player.now_playing().clone(),
             *self.player.is_nowplaying(),
-            self.tabs_state.clone(),
+            self.screen.clone(),
             self.tabs_titles.clone(),
             frame,
             header_area,
@@ -171,7 +168,7 @@ fn render_content(
 fn render_header(
     now_playing: Video,
     is_nowplaying: bool,
-    tabs_state: TabsState,
+    screen: Screen,
     tabs_titles: Vec<String>,
     frame: &mut Frame<'_>,
     header_area: Rect,
@@ -195,7 +192,7 @@ fn render_header(
         .divider("")
         .block(left_block.clone())
         .highlight_style(Style::new().fg(HIGHLIGHT_FG).bg(HIGHLIGHT_BG).bold())
-        .select(Some(tabs_state.selected()));
+        .select(Some(screen.current()));
 
     let now_playing = if is_nowplaying {
         Paragraph::new(String::from(&now_playing.title)).block(right_block.clone())
