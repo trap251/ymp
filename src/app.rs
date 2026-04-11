@@ -8,7 +8,6 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
 use std::{env, fs, path::PathBuf, time::Duration};
-use tokio::sync::mpsc;
 
 // Paths
 // tries to find yt-dlp path e.g. /usr/bin/yt-dlp
@@ -37,6 +36,7 @@ pub struct App {
     /// Is the application running?
     running: bool,
     pub player: Player,
+    search: search::Search,
     //menulist_state: ListState,
     pub resultlist: Vec<Video>,
     pub resultlist_state: ListState,
@@ -47,16 +47,13 @@ pub struct App {
     pub screen: Screen,
     pub search_query: String,
     pub tabs_titles: Vec<String>,
-
-    // tokio  search-related stuff
-    search_is_loading: bool, // In-case I want to add a leading screen
-    search_rx: Option<mpsc::UnboundedReceiver<color_eyre::Result<Vec<Video>>>>, //receives search results
 }
 
 impl App {
     /// Construct a new instance of [`App`].
     fn default() -> Self {
         let running = true;
+        let search = search::Search::default();
         let player = Player::new();
         let tabs_titles: Vec<String> = vec![
             String::from("     Queue     "),
@@ -69,11 +66,10 @@ impl App {
         let mode = Mode::default();
         let search_query = String::default();
         let screen = Screen::Queue;
-        let search_is_loading = false;
-        let search_rx = None;
 
         Self {
             running,
+            search,
             player,
             tabs_titles,
             //menulist_state,
@@ -84,8 +80,6 @@ impl App {
             mode,
             search_query,
             screen,
-            search_is_loading,
-            search_rx,
         }
     }
     pub fn new() -> Self {
@@ -103,7 +97,19 @@ impl App {
 
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
-            self.check_search_results()?;
+            match self.search.check_search_results() {
+                Ok(videos) => {
+                    self.screen.select(1);
+                    self.resultlist = videos;
+                    if !self.resultlist.is_empty() {
+                        self.resultlist_state.select(Some(0));
+                    }
+                }
+                Err(_) => {
+                    // FIX add error handling
+                }
+            };
+
             self.player.try_connect_mpv();
             if event::poll(Duration::from_millis(50))? {
                 self.handle_crossterm_events()?;
@@ -142,7 +148,8 @@ impl App {
                     self.search_query.pop();
                 }
                 KeyCode::Enter => {
-                    self.search();
+                    self.search
+                        .search(&mut self.resultlist, self.search_query.to_owned());
                     self.search_query = String::new();
                     self.mode = Mode::Default;
                     self.screen = Screen::Results;
@@ -224,52 +231,6 @@ impl App {
                         }
                         _ => {}
                     }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn search(&mut self) {
-        self.search_is_loading = true;
-
-        self.resultlist.clear();
-        let (tx, rx) = mpsc::unbounded_channel();
-        self.search_rx = Some(rx);
-
-        let query = self.search_query.clone();
-
-        tokio::spawn(async move {
-            let out = search::perform_search(query).await;
-            let _ = tx.send(out);
-        });
-
-        // self.search_is_loading is set to false in check_search_results for obvious reasons. (Because
-        // search_is_loading doesn't stop until check search results is completed)
-    }
-
-    fn check_search_results(&mut self) -> color_eyre::Result<()> {
-        if let Some(rx) = &mut self.search_rx {
-            match rx.try_recv() {
-                Ok(Ok(videos)) => {
-                    self.screen.select(1);
-                    self.resultlist = videos;
-                    if !self.resultlist.is_empty() {
-                        self.resultlist_state.select(Some(0));
-                    }
-                    self.search_is_loading = false;
-                    self.search_rx = None;
-                }
-                Ok(Err(e)) => {
-                    return Err(color_eyre::eyre::eyre!("Videos not recived. Error: {}", e));
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    // Might still be loading. Don't do anything here.
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    // Died unexpectedly
-                    self.search_is_loading = false;
-                    self.search_rx = None;
                 }
             }
         }
