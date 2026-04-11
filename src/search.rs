@@ -16,6 +16,10 @@ impl Search {
     pub fn default() -> Self {
         let search_is_loading = false;
         let search_rx = None;
+        // Paths
+        // tries to find yt-dlp path e.g. /usr/bin/yt-dlp
+        // FIX: Install yt_dlp if path not found. HINT: Change ERR()
+
         let yt_dlp_path = match which::which("yt-dlp").map_err(|_| "can't find yt-dlp in PATH") {
             Ok(path) => path,
             Err(_) => PathBuf::from("/usr/bin/yt-dlp"),

@@ -1,5 +1,3 @@
-// TODO: Make code modular; separate parts into their own files
-// FIX: Screens and Tabs logic. Fix App::tabs_select(). Fix magic numbers.
 use crate::player::Player;
 use crate::search;
 use crate::types::{Mode, Screen, Video};
@@ -8,10 +6,6 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
 use std::{env, fs, path::PathBuf, time::Duration};
-
-// Paths
-// tries to find yt-dlp path e.g. /usr/bin/yt-dlp
-// FIX: Install yt_dlp if path not found. HINT: Change ERR()
 
 // queuelist is saved here
 fn queuelist_path() -> String {
