@@ -1,28 +1,12 @@
 use crate::player::Player;
+use crate::queue::Queue;
 use crate::search;
 use crate::types::{Mode, Screen, Video};
 
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
-use std::{env, fs, path::PathBuf, time::Duration};
-
-// queuelist is saved here
-fn queuelist_path() -> String {
-    match dirs::data_local_dir() {
-        Some(mut path) => {
-            path.push("ymp");
-            path.push("queuelist.json");
-            path.to_string_lossy().into_owned()
-        }
-        None => {
-            let mut path = PathBuf::from(".");
-            path.push("ymp");
-            path.push("queuelist.json");
-            path.to_string_lossy().into_owned()
-        }
-    }
-}
+use std::{env, time::Duration};
 
 /// The main application which holds the state and logic of the application.
 #[derive(Debug, Default)]
@@ -30,12 +14,11 @@ pub struct App {
     /// Is the application running?
     running: bool,
     pub player: Player,
+    pub queue: Queue,
     search: search::Search,
     //menulist_state: ListState,
     pub resultlist: Vec<Video>,
     pub resultlist_state: ListState,
-    pub queuelist: Vec<Video>,
-    pub queuelist_state: ListState,
 
     pub mode: Mode,
     pub screen: Screen,
@@ -49,14 +32,13 @@ impl App {
         let running = true;
         let search = search::Search::default();
         let player = Player::new();
+        let queue = Queue::new();
         let tabs_titles: Vec<String> = vec![
             String::from("     Queue     "),
             String::from("     Results     "),
         ];
         let resultlist = Vec::new();
         let resultlist_state = ListState::default().with_selected(Some(0));
-        let queuelist = Vec::new();
-        let queuelist_state = ListState::default().with_selected(Some(0));
         let mode = Mode::default();
         let search_query = String::default();
         let screen = Screen::Queue;
@@ -65,12 +47,11 @@ impl App {
             running,
             search,
             player,
+            queue,
             tabs_titles,
             //menulist_state,
             resultlist,
             resultlist_state,
-            queuelist,
-            queuelist_state,
             mode,
             search_query,
             screen,
@@ -87,7 +68,7 @@ impl App {
         if let Some(url) = env::args().nth(1) {
             self.player.play_video_url(url)?;
         }
-        self.retrieve_queue()?;
+        self.queue.retrieve_queue()?;
 
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
@@ -170,8 +151,15 @@ impl App {
                         KeyCode::Char('j') => self.resultlist_state.select_next(),
                         KeyCode::Char('k') => self.resultlist_state.select_previous(),
                         KeyCode::Enter => {
-                            self.queuelist.push(self.player.now_playing().clone());
-                            self.save_queue()?;
+                            if self.queue.queuelist().is_empty() {
+                                self.queue
+                                    .add_to_queue(&self.resultlist, &self.resultlist_state)?;
+                                self.player.play_video(&mut self.queue)?;
+                            } else {
+                                self.queue
+                                    .add_to_queue(&self.resultlist, &self.resultlist_state)?;
+                            }
+                            self.queue.save_queue()?;
                             self.screen.select(0);
                         }
                         KeyCode::Char('/') => self.mode = Mode::Search,
@@ -185,8 +173,8 @@ impl App {
                             self.quit()
                         }
                         KeyCode::Char('C') => {
-                            self.queuelist.clear();
-                            self.save_queue()?;
+                            self.queue.queuelist().clear();
+                            self.queue.save_queue()?;
                         }
                         KeyCode::Char('H') => {
                             self.screen.next();
@@ -194,11 +182,9 @@ impl App {
                         KeyCode::Char('L') => {
                             self.screen.previous();
                         }
-                        KeyCode::Char('j') => self.queuelist_state.select_next(),
-                        KeyCode::Char('k') => self.queuelist_state.select_previous(),
-                        KeyCode::Enter => self
-                            .player
-                            .play_video(&self.queuelist, &self.queuelist_state)?,
+                        KeyCode::Char('j') => self.queue.queuelist_state().select_next(),
+                        KeyCode::Char('k') => self.queue.queuelist_state().select_previous(),
+                        KeyCode::Enter => self.player.play_video(&mut self.queue)?,
                         KeyCode::Char('/') => self.mode = Mode::Search,
                         KeyCode::Char('m') => self.player.playback_mode_switch(),
                         KeyCode::Esc | KeyCode::Char('s') => {
@@ -225,24 +211,6 @@ impl App {
                     }
                 }
             }
-        }
-        Ok(())
-    }
-
-    fn save_queue(&self) -> color_eyre::Result<()> {
-        if let Some((path, _filename)) = queuelist_path().rsplit_once("/") {
-            fs::DirBuilder::new().recursive(true).create(path)?;
-        }
-        let queuelist_json = serde_json::to_string_pretty(&self.queuelist)?;
-        fs::write(queuelist_path(), queuelist_json)?;
-        Ok(())
-    }
-
-    fn retrieve_queue(&mut self) -> color_eyre::Result<()> {
-        let queuelist_path_string = queuelist_path();
-        if fs::exists(&queuelist_path_string)? {
-            let queuelist = fs::read_to_string(&queuelist_path_string)?;
-            self.queuelist = serde_json::from_str(queuelist.as_str())?;
         }
         Ok(())
     }

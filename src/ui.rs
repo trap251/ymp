@@ -42,7 +42,12 @@ impl App {
                 render_content(frame, content_area, self.resultlist_state, &self.resultlist);
             }
             Screen::Queue => {
-                render_content(frame, content_area, self.queuelist_state, &self.queuelist);
+                render_content(
+                    frame,
+                    content_area,
+                    self.queue.queuelist_state().to_owned(),
+                    self.queue.queuelist(),
+                );
             }
         }
 

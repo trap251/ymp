@@ -1,5 +1,6 @@
 mod app;
 mod player;
+mod queue;
 mod search;
 mod types;
 mod ui;

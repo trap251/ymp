@@ -5,8 +5,7 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
-use ratatui::widgets::ListState;
-
+use crate::queue::Queue;
 use crate::types::{PlaybackMode, Video};
 
 #[derive(Default, Debug)]
@@ -82,22 +81,22 @@ impl Player {
         self.send_mpv_command(vec!["get_property", "volume"])
     }
 
-    pub fn play_video(&mut self, list: &[Video], state: &ListState) -> color_eyre::Result<()> {
+    pub fn play_video(&mut self, queue: &mut Queue) -> color_eyre::Result<()> {
         if *self.is_nowplaying() {
             self.kill_mpv();
         }
 
         self.is_nowplaying = true;
 
-        if let Some(index) = state.selected() {
-            if list.len() <= index {
+        if let Some(index) = queue.queuelist_state().selected() {
+            if queue.queuelist().len() <= index {
                 return Err(color_eyre::eyre::eyre!(
                     "Index out of bounds in {} at {} ",
                     file!(),
                     line!()
                 ));
             };
-            self.now_playing = list[index].clone();
+            self.now_playing = queue.queuelist()[index].clone();
         }
 
         match self.playback_mode {
