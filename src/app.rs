@@ -170,8 +170,6 @@ impl App {
                         KeyCode::Char('j') => self.resultlist_state.select_next(),
                         KeyCode::Char('k') => self.resultlist_state.select_previous(),
                         KeyCode::Enter => {
-                            self.player
-                                .play_video(&self.resultlist, &self.resultlist_state)?;
                             self.queuelist.push(self.player.now_playing().clone());
                             self.save_queue()?;
                             self.screen.select(0);
