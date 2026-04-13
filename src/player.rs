@@ -206,12 +206,10 @@ impl Player {
         }
         let json_args = vec_args.join(",");
         let message = format!("{{\"command\": [{json_args}]}}\n");
-        if let Some(mut stream) = self.mpv_stream.take()
+        if let Some(ref mut stream) = self.mpv_stream
             && let Err(e) = stream.write_all(message.as_bytes())
         {
-            return Err(color_eyre::eyre::eyre!(
-                "Could not write to UnixStream at send_mpv_command(): {e} "
-            ));
+            eprintln!("Could not write to UnixStream at send_mpv_command(): {e} ");
         }
         Ok(())
     }
