@@ -197,7 +197,11 @@ impl Player {
     }
     fn send_mpv_command(&mut self, args: Vec<&str>) -> color_eyre::Result<()> {
         if self.mpv_stream.is_none() {
-            eprintln!("Can't send controls mpv stream is not even connected yet. wait a bit.");
+            eprintln!(
+                "mpv_stream doesn't exist. Controls won't work right now. This is open source go to {} at line {}",
+                file!(),
+                line!()
+            );
             return Ok(());
         }
         let mut vec_args: Vec<String> = Vec::new();
@@ -209,7 +213,9 @@ impl Player {
         if let Some(ref mut stream) = self.mpv_stream
             && let Err(e) = stream.write_all(message.as_bytes())
         {
-            eprintln!("Could not write to UnixStream at send_mpv_command(): {e} ");
+            return Err(color_eyre::eyre::eyre!(
+                "Could not write to UnixStream at send_mpv_command(): {e} "
+            ));
         }
         Ok(())
     }
