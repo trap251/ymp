@@ -1,3 +1,4 @@
+//FIX remove all pubs from struct definition.
 use crate::player::Player;
 use crate::queue::Queue;
 use crate::search;
