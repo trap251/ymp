@@ -33,8 +33,8 @@ impl App {
     /// Construct a new instance of [`App`].
     fn default() -> Self {
         let running = true;
-        let search = Search::default();
-        let settings = Settings::default();
+        let search = Search::new();
+        let settings = Settings::new();
         let player = Player::new();
         let queue = Queue::new();
         let tabs_titles: Vec<String> = vec![

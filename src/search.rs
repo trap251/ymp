@@ -33,6 +33,10 @@ impl Search {
         }
     }
 
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn search(&mut self, resultlist: &mut Vec<Video>, search_query: String) {
         self.search_is_loading = true;
 

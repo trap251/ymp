@@ -5,12 +5,20 @@ use serde::Serialize;
 #[derive(Serialize, Debug, Default)]
 pub struct Settings {
     settings_path: String,
+    browser: Option<String>,
 }
 
 impl Settings {
     pub fn default() -> Self {
         let settings_path = Self::init_settings_path();
-        Self { settings_path }
+        let browser = Option::default();
+        Self {
+            settings_path,
+            browser,
+        }
+    }
+    pub fn new() -> Self {
+        Self::default()
     }
     pub fn save(&self) -> color_eyre::Result<()> {
         if let Some((path, _filename)) = self.settings_path.rsplit_once("/") {
