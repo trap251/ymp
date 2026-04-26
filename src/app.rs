@@ -1,7 +1,8 @@
 //FIX remove all pubs from struct definition.
 use crate::player::Player;
 use crate::queue::Queue;
-use crate::search;
+use crate::search::Search;
+use crate::settings::Settings;
 use crate::types::{Mode, Screen, Video};
 
 use crossterm::event::{self, Event, KeyEventKind};
@@ -16,7 +17,8 @@ pub struct App {
     running: bool,
     pub player: Player,
     pub queue: Queue,
-    search: search::Search,
+    search: Search,
+    settings: Settings,
     //menulist_state: ListState,
     pub resultlist: Vec<Video>,
     pub resultlist_state: ListState,
@@ -31,7 +33,8 @@ impl App {
     /// Construct a new instance of [`App`].
     fn default() -> Self {
         let running = true;
-        let search = search::Search::default();
+        let search = Search::default();
+        let settings = Settings::default();
         let player = Player::new();
         let queue = Queue::new();
         let tabs_titles: Vec<String> = vec![
@@ -47,6 +50,7 @@ impl App {
         Self {
             running,
             search,
+            settings,
             player,
             queue,
             tabs_titles,
@@ -70,6 +74,7 @@ impl App {
             self.player.play_video_url(url)?;
         }
         self.queue.retrieve_queue()?;
+        self.settings.save()?;
 
         while self.running {
             terminal.draw(|frame| self.render(frame))?;

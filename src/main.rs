@@ -2,6 +2,7 @@ mod app;
 mod player;
 mod queue;
 mod search;
+mod settings;
 mod types;
 mod ui;
 use crate::app::App;
