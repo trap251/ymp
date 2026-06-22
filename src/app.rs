@@ -1,4 +1,8 @@
-//FIX remove all pubs from struct definition.
+//FIX: remove all pubs from struct definition.
+// FIX: keycode portion. Too much code duplition.
+// TODO: Add loading cookies from browser
+// TODO: Can check if song is complete by compairing current time with total time. or remaining
+// seconds == 0 if possible.
 use crate::player::Player;
 use crate::queue::Queue;
 use crate::search::Search;
@@ -27,6 +31,7 @@ pub struct App {
     pub screen: Screen,
     pub search_query: String,
     pub tabs_titles: Vec<String>,
+    pub browser: String,
 }
 
 impl App {
@@ -46,6 +51,7 @@ impl App {
         let mode = Mode::default();
         let search_query = String::default();
         let screen = Screen::Queue;
+        let browser = String::new();
 
         Self {
             running,
@@ -60,6 +66,7 @@ impl App {
             mode,
             search_query,
             screen,
+            browser,
         }
     }
     pub fn new() -> Self {
@@ -116,6 +123,73 @@ impl App {
 
     fn on_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
         match self.mode {
+            Mode::Default => {
+                match key.code {
+                    KeyCode::Char('q' | 'Q') => self.quit(),
+                    KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.quit()
+                    }
+                    KeyCode::Char('H') => {
+                        self.screen.next();
+                    }
+                    KeyCode::Char('L') => {
+                        self.screen.previous();
+                    }
+                    KeyCode::Char('/') => self.mode = Mode::Search,
+                    KeyCode::Char('m') => self.player.playback_mode_switch(),
+                    KeyCode::Char('9') => {
+                        if *self.player.is_nowplaying() {
+                            self.player.decrease_volume()?;
+                            self.player.get_current_volume()?;
+                        }
+                    }
+                    KeyCode::Char('0') => {
+                        if *self.player.is_nowplaying() {
+                            self.player.increase_volume()?;
+                        }
+                    }
+                    KeyCode::Char(' ') => {
+                        if *self.player.is_nowplaying() {
+                            self.player.play_pause()?;
+                        }
+                    }
+                    _ => {}
+                }
+                if self.screen == Screen::Results {
+                    match key.code {
+                        KeyCode::Char('j') => self.resultlist_state.select_next(),
+                        KeyCode::Char('k') => self.resultlist_state.select_previous(),
+                        KeyCode::Enter => {
+                            if self.queue.queuelist().is_empty() {
+                                self.queue
+                                    .add_to_queue(&self.resultlist, &self.resultlist_state)?;
+                                self.player.play_video(&mut self.queue)?;
+                            } else {
+                                self.queue
+                                    .add_to_queue(&self.resultlist, &self.resultlist_state)?;
+                            }
+                            self.queue.save_queue()?;
+                            self.screen.select(0);
+                        }
+                        _ => {}
+                    }
+                } else if self.screen == Screen::Queue {
+                    match key.code {
+                        KeyCode::Char('C') => {
+                            self.queue.queuelist().clear();
+                            self.queue.save_queue()?;
+                        }
+                        KeyCode::Char('j') => self.queue.queuelist_state().select_next(),
+                        KeyCode::Char('k') => self.queue.queuelist_state().select_previous(),
+                        KeyCode::Enter => self.player.play_video(&mut self.queue)?,
+                        KeyCode::Esc | KeyCode::Char('s') => {
+                            self.player.stop()?;
+                            self.mode = Mode::Default;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Mode::Search => match key.code {
                 KeyCode::Char('c' | 'C') => {
                     if key.modifiers == KeyModifiers::CONTROL {
@@ -141,82 +215,6 @@ impl App {
                 }
                 _ => {}
             },
-            Mode::Default => {
-                if self.screen == Screen::Results {
-                    match key.code {
-                        KeyCode::Char('q' | 'Q') => self.quit(),
-                        KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
-                            self.quit()
-                        }
-                        KeyCode::Char('H') => {
-                            self.screen.next();
-                        }
-                        KeyCode::Char('L') => {
-                            self.screen.previous();
-                        }
-                        KeyCode::Char('j') => self.resultlist_state.select_next(),
-                        KeyCode::Char('k') => self.resultlist_state.select_previous(),
-                        KeyCode::Enter => {
-                            if self.queue.queuelist().is_empty() {
-                                self.queue
-                                    .add_to_queue(&self.resultlist, &self.resultlist_state)?;
-                                self.player.play_video(&mut self.queue)?;
-                            } else {
-                                self.queue
-                                    .add_to_queue(&self.resultlist, &self.resultlist_state)?;
-                            }
-                            self.queue.save_queue()?;
-                            self.screen.select(0);
-                        }
-                        KeyCode::Char('/') => self.mode = Mode::Search,
-                        KeyCode::Char('m') => self.player.playback_mode_switch(),
-                        _ => {}
-                    }
-                } else if self.screen == Screen::Queue {
-                    match key.code {
-                        KeyCode::Char('q' | 'Q') => self.quit(),
-                        KeyCode::Char('c' | 'C') if key.modifiers == KeyModifiers::CONTROL => {
-                            self.quit()
-                        }
-                        KeyCode::Char('C') => {
-                            self.queue.queuelist().clear();
-                            self.queue.save_queue()?;
-                        }
-                        KeyCode::Char('H') => {
-                            self.screen.next();
-                        }
-                        KeyCode::Char('L') => {
-                            self.screen.previous();
-                        }
-                        KeyCode::Char('j') => self.queue.queuelist_state().select_next(),
-                        KeyCode::Char('k') => self.queue.queuelist_state().select_previous(),
-                        KeyCode::Enter => self.player.play_video(&mut self.queue)?,
-                        KeyCode::Char('/') => self.mode = Mode::Search,
-                        KeyCode::Char('m') => self.player.playback_mode_switch(),
-                        KeyCode::Esc | KeyCode::Char('s') => {
-                            self.player.stop()?;
-                            self.mode = Mode::Default;
-                        }
-                        KeyCode::Char('9') => {
-                            if *self.player.is_nowplaying() {
-                                self.player.decrease_volume()?;
-                                self.player.get_current_volume()?;
-                            }
-                        }
-                        KeyCode::Char('0') => {
-                            if *self.player.is_nowplaying() {
-                                self.player.increase_volume()?;
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            if *self.player.is_nowplaying() {
-                                self.player.play_pause()?;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
         }
         Ok(())
     }
