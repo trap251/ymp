@@ -1,5 +1,4 @@
 //FIX: remove all pubs from struct definition.
-// FIX: keycode portion. Too much code duplition.
 // TODO: Add loading cookies from browser
 // TODO: Can check if song is complete by compairing current time with total time. or remaining
 // seconds == 0 if possible.
@@ -9,6 +8,7 @@ use crate::search::Search;
 use crate::settings::Settings;
 use crate::types::{Mode, Screen, Video};
 
+use crossterm::event::Event::Key;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
@@ -159,6 +159,18 @@ impl App {
                     match key.code {
                         KeyCode::Char('j') => self.resultlist_state.select_next(),
                         KeyCode::Char('k') => self.resultlist_state.select_previous(),
+                        KeyCode::Char('d') => {
+                            if key.modifiers == KeyModifiers::CONTROL {
+                                self.resultlist_state.scroll_down_by(5);
+                            }
+                        }
+                        KeyCode::Char('u') => {
+                            if key.modifiers == KeyModifiers::CONTROL {
+                                self.resultlist_state.scroll_up_by(5);
+                            }
+                        }
+                        KeyCode::Char('g') => self.resultlist_state.select_first(),
+                        KeyCode::Char('G') => self.resultlist_state.select_last(),
                         KeyCode::Enter => {
                             if self.queue.queuelist().is_empty() {
                                 self.queue
@@ -181,6 +193,23 @@ impl App {
                         }
                         KeyCode::Char('j') => self.queue.queuelist_state().select_next(),
                         KeyCode::Char('k') => self.queue.queuelist_state().select_previous(),
+                        KeyCode::Char('d') => {
+                            if key.modifiers == KeyModifiers::CONTROL {
+                                self.queue.queuelist_state().scroll_down_by(5);
+                            } else {
+                                if let Some(index) = self.queue.queuelist_state().selected() {
+                                    self.queue.queuelist().remove(index);
+                                    self.queue.save_queue()?;
+                                }
+                            }
+                        }
+                        KeyCode::Char('u') => {
+                            if key.modifiers == KeyModifiers::CONTROL {
+                                self.queue.queuelist_state().scroll_up_by(5);
+                            }
+                        }
+                        KeyCode::Char('g') => self.queue.queuelist_state().select_first(),
+                        KeyCode::Char('G') => self.queue.queuelist_state().select_last(),
                         KeyCode::Enter => self.player.play_video(&mut self.queue)?,
                         KeyCode::Esc | KeyCode::Char('s') => {
                             self.player.stop()?;
