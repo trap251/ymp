@@ -6,6 +6,10 @@ YouTube Media Player. Browse and play YouTube music/audio from the terminal.
 
 This is not like a normal music player. Searching and Playing are not instant as it needs to fetch results for search and then use mpv to stream directly with the video's link. This doesn't store anything locally, so far. I needed this tool personally so I published it, in case someone else needs it as well <3
 
+#### Not as important
+
+This is a learning project for me, primarily to learn rust, so 0% of the code here is AI-generated. I am solely responsible for any catastrophic blunders you may come across.
+
 ## Installation (Linux)
 
 On arch, get ymp-bin from the AUR. For example:
