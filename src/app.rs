@@ -8,7 +8,6 @@ use crate::search::Search;
 use crate::settings::Settings;
 use crate::types::{Mode, Screen, Video};
 
-use crossterm::event::Event::Key;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{DefaultTerminal, widgets::ListState};
@@ -31,7 +30,6 @@ pub struct App {
     pub screen: Screen,
     pub search_query: String,
     pub tabs_titles: Vec<String>,
-    pub browser: String,
 }
 
 impl App {
@@ -51,7 +49,6 @@ impl App {
         let mode = Mode::default();
         let search_query = String::default();
         let screen = Screen::Queue;
-        let browser = String::new();
 
         Self {
             running,
@@ -66,7 +63,6 @@ impl App {
             mode,
             search_query,
             screen,
-            browser,
         }
     }
     pub fn new() -> Self {

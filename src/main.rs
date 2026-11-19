@@ -1,4 +1,5 @@
 mod app;
+mod logger;
 mod player;
 mod queue;
 mod search;
@@ -8,6 +9,7 @@ mod ui;
 use crate::app::App;
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
+    logger::log("Big Problem", file!(), line!());
     color_eyre::install()?;
     let terminal = ratatui::init();
     let result = App::new().run(terminal).await;
